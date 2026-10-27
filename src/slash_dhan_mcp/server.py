@@ -32,6 +32,7 @@ from starlette.responses import (
     Response,
 )
 from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from slashdhan.config import today_ist
 from slashdhan.schema import reference
@@ -517,6 +518,11 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             Route("/SKILL.md", skill_md, methods=["GET"]),
             Route("/.well-known/openai-apps-challenge", openai_apps_challenge, methods=["GET"]),
             Route("/internal/sweep", sweep, methods=["POST"]),
+            Mount(
+                "/brand",
+                app=StaticFiles(directory=str(Path(__file__).parent / "brand")),
+                name="brand",
+            ),
             Mount("/", app=mcp_app),
         ],
         lifespan=mcp_app.router.lifespan_context,

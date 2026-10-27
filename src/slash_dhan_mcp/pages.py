@@ -13,6 +13,8 @@ _SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex"><title>{title} · /markets</title>
 <style>
+  @font-face {{ font-family: "Onest"; src: url("{assets}/fonts/onest-latin.woff2") format("woff2"); font-style: normal; font-weight: 400 600; font-display: swap; }}
+  @font-face {{ font-family: "Libre Baskerville"; src: url("{assets}/fonts/libre-baskerville-500-latin.woff2") format("woff2"); font-style: normal; font-weight: 500; font-display: swap; }}
   :root {{ color-scheme: light; --ink: #20251b; --muted: #62675f; --surface: #f7f6f2; --border: #e4e7dc;
           --select: #f6d64d; --select-pale: #fbefbd; --button: #171a17; --negative: #a43c2f; --negative-surface: #f8e3df;
           --positive: #34432e; --positive-surface: #e6efdc; --ring: #4a6640; }}
@@ -129,13 +131,14 @@ ICON_COPY = _ICON.format(
 )
 
 
-def shell(title: str, body: str, home: str) -> str:
+def shell(title: str, body: str, home: str, assets: str = "/brand") -> str:
     return _SHELL.format(
         title=html.escape(title),
         body=body,
         home=html.escape(home),
         logomark=_LOGOMARK.format(paths=LOGOMARK_PATHS),
         slash=_SLASH_DATA,
+        assets=html.escape(assets),
     )
 
 

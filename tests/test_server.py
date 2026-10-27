@@ -273,6 +273,10 @@ def test_skill_zip_download_and_page_link(h: Harness) -> None:
     assert body.startswith(b"---\nname: slash-markets-dhan\n")
     page = httpx.get(f"{h.base}/watchers").text
     assert f'href="{h.base}/slash-markets-dhan.zip"' in page
+    assert 'url("/brand/fonts/onest-latin.woff2")' in page
+    font = httpx.get(f"{h.base}/brand/fonts/libre-baskerville-500-latin.woff2")
+    assert font.status_code == 200 and font.headers["content-type"] == "font/woff2"
+    assert httpx.get(f"{h.base}/brand/../pyproject.toml").status_code == 404
     assert f'href="{h.base}/SKILL.md"' in page
     r = httpx.get(f"{h.base}/SKILL.md")
     assert r.status_code == 200 and r.headers["content-type"] == "text/plain; charset=utf-8"
