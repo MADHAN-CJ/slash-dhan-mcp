@@ -21,7 +21,6 @@ from slash_dhan_mcp.config import load_settings
 
 from .fake_dhan import CLIENT_ID, TODAY, FakeDhan
 
-PATH_SECRET = "p" * 48
 ADMIN_SECRET = "a" * 48
 SWEEP_SECRET = "sweep-secret-for-tests"
 CHALLENGE_TOKEN = "openai-apps-challenge-token"
@@ -44,13 +43,11 @@ class Harness:
     def __init__(self, tmp: Path) -> None:
         self.port = _free_port()
         self.base = f"http://127.0.0.1:{self.port}"
-        self.mount = f"{self.base}/{PATH_SECRET}"
         self.fake = FakeDhan()
         env = {
             "SLASH_DHAN_MCP_PUBLIC_URL": self.base,
             "SLASH_DHAN_MCP_HOST": "127.0.0.1",
             "SLASH_DHAN_MCP_PORT": str(self.port),
-            "SLASH_DHAN_MCP_PATH_SECRET": PATH_SECRET,
             "SLASH_DHAN_MCP_ADMIN_SECRET": ADMIN_SECRET,
             "CREDS_ENCRYPTION_KEY": secrets.token_hex(32),
             "SLASH_DHAN_MCP_STATE_DIR": str(tmp / "state"),
@@ -180,7 +177,7 @@ class Mcp:
 
 
 def mcp(h: Harness) -> Mcp:
-    return Mcp(f"{h.mount}/mcp")
+    return Mcp(f"{h.base}/")
 
 
 def admin(h: Harness, method: str, path: str, **kw: Any) -> httpx.Response:
@@ -233,14 +230,13 @@ def age_watchers(h: Harness) -> None:
 # ---------------------------------------------------------------- tests
 
 
-def test_health_mount_and_tool_specs(h: Harness) -> None:
+def test_health_root_mcp_and_tool_specs(h: Harness) -> None:
     assert httpx.get(f"{h.base}/health").json() == {
         "ok": True,
         "service": "slash-dhan-mcp",
         "feed": "unset",
     }
     assert httpx.post(f"{h.base}/mcp", json={}).status_code == 404
-    assert httpx.post(f"{h.base}/{'x' * 48}/mcp", json={}).status_code == 404
     r = httpx.get(f"{h.base}/.well-known/openai-apps-challenge")
     assert r.status_code == 200 and r.text == CHALLENGE_TOKEN
     m = mcp(h)
@@ -267,7 +263,7 @@ def test_tools_before_a_token_is_pushed(h: Harness) -> None:
     res = m.call("feed_status", {})
     assert res["structuredContent"]["feed"] == "unset"
     assert "no token yet" in res["structuredContent"]["message"]
-    assert res["structuredContent"]["watchersPageUrl"] == f"{h.mount}/watchers"
+    assert res["structuredContent"]["watchersPageUrl"] == f"{h.base}/watchers"
     text, is_error = m.tool("run_python", code="print(1)")
     assert not is_error and "no token yet" in text
     text, _ = m.tool(
@@ -382,7 +378,9 @@ def test_gateway_rejects_bad_tokens_and_writes(h: Harness) -> None:
         assert r.status_code == 403 and "not a read endpoint" in r.text, (method, path)
     assert not [c for c in h.fake.calls if c.path.startswith("/orders") and c.method == "POST"]
     r = httpx.request("DELETE", f"{h.base}/dhan/orders/1", headers=hdr)
-    assert r.status_code == 405
+    assert r.status_code == 403 and "not a read endpoint" in r.text
+    r = httpx.request("PUT", f"{h.base}/dhan/orders/1", headers=hdr, json={})
+    assert r.status_code == 403
     r = httpx.post(f"{h.base}/dhan/marketfeed/ltp", headers=hdr, content=b"not json")
     assert r.status_code == 400
     h.app.tokens.revoke(token)
@@ -479,7 +477,7 @@ def test_watcher_lifecycle_and_page(h: Harness) -> None:
     )
     w = json.loads(text)["watcher"]
     assert w["status"] == "ARMED" and w["alreadyMet"] is False and w["market"] == "NSE"
-    assert w["notifyEmail"] == USER_EMAIL and w["pageUrl"] == f"{h.mount}/watchers"
+    assert w["notifyEmail"] == USER_EMAIL and w["pageUrl"] == f"{h.base}/watchers"
     wid = w["id"]
 
     gold, _ = m.tool(
@@ -505,7 +503,7 @@ def test_watcher_lifecycle_and_page(h: Harness) -> None:
         and "RELIANCE above 1000" in mail["subject"]
         and "1650" in mail["text"]
     )
-    assert f"{h.mount}/watchers" in mail["text"]
+    assert f"{h.base}/watchers" in mail["text"]
 
     age_watchers(h)
     assert sweep(h)["fired"] == 0
@@ -519,14 +517,14 @@ def test_watcher_lifecycle_and_page(h: Harness) -> None:
     assert listed[wid]["alertCount"] == 2 and len(listed[wid]["recentAlerts"]) == 2
     assert listed[wid]["notifyEmail"] == USER_EMAIL
 
-    web = httpx.Client(base_url=h.mount, follow_redirects=False, timeout=10)
+    web = httpx.Client(base_url=h.base, follow_redirects=False, timeout=10)
     page = web.get("/watchers").text
     assert "RELIANCE above 1000" in page and "gold" in page and "MCX hours" in page
     assert "tr…@example.com" in page and USER_EMAIL not in page
     assert "Libre Baskerville" in page and 'class="slash"' in page and "Dhan feed active" in page
     assert "Zap" not in page and "Slash Markets" not in page
     r = web.post(f"/watchers/{wid}/pause")
-    assert r.status_code == 303 and r.headers["location"] == f"{h.mount}/watchers"
+    assert r.status_code == 303 and r.headers["location"] == f"{h.base}/watchers"
     assert row(h, wid)["status"] == "PAUSED"
     assert web.post(f"/watchers/{wid}/pause").status_code == 303
     assert "cannot pause" in web.get(web.post(f"/watchers/{wid}/pause").headers["location"]).text

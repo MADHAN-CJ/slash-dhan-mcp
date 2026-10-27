@@ -11,4 +11,4 @@ Design notes relevant to reviewers:
 - Every script runs in a separate subprocess with a scrubbed environment, a wall-clock timeout
   and an output cap.
 - The library exposes no order placement, modification or cancellation.
-- The MCP endpoint is unauthenticated by design (internal host); the URL carries a secret path.
+- The MCP endpoint is unauthenticated by design and served at the host root: run it on an internal host only.

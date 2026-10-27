@@ -1,0 +1,34 @@
+[Unit]
+Description=slash-dhan-mcp (/markets Dhan sandbox MCP and watchers)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=slashdhan
+Group=slashdhan
+WorkingDirectory=/opt/slash-dhan-mcp
+EnvironmentFile=/opt/slash-dhan-mcp/.env
+Environment=HOME=/var/lib/slashdhan
+ExecStart=/opt/slash-dhan-mcp/.venv/bin/slash-dhan-mcp
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+InaccessiblePaths=-/var/www -/etc/nginx -/etc/letsencrypt -/opt/zap-claude-mcp -/opt/zap-eve-mcp -/opt/zap-kite-mcp
+ReadWritePaths=/var/lib/slashdhan
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryMax=1G
+CPUQuota=200%
+TasksMax=256
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

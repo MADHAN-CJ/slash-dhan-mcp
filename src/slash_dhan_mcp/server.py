@@ -390,10 +390,10 @@ def _admin_ok(request: Request, settings: Settings) -> bool:
 
 
 def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
-    """Public routes at the host root; the MCP endpoint and the watchers page under the secret path."""
+    """One Starlette app: admin, gateway and health routes first, then the MCP app at the root."""
     s = app.settings
     mcp_app = server.streamable_http_app(
-        streamable_http_path="/mcp",
+        streamable_http_path="/",
         stateless_http=True,
         json_response=True,
         max_request_body_size=512 * 1024,
@@ -480,11 +480,11 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             Route("/health", health, methods=["GET"]),
             Route("/admin/feed/status", admin_status, methods=["GET"]),
             Route("/admin/feed/token", admin_token, methods=["PUT", "POST", "DELETE"]),
-            Route("/dhan/{path:path}", gateway, methods=["GET", "POST"]),
+            Route("/dhan/{path:path}", gateway, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
             Route("/scrip-master.csv", scrip_master, methods=["GET"]),
             Route("/.well-known/openai-apps-challenge", openai_apps_challenge, methods=["GET"]),
             Route("/internal/sweep", sweep, methods=["POST"]),
-            Mount(s.mount_path, app=mcp_app),
+            Mount("/", app=mcp_app),
         ],
         lifespan=mcp_app.router.lifespan_context,
     )

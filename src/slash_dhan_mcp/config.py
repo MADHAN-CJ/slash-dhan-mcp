@@ -41,7 +41,6 @@ class Settings:
     public_url: str
     host: str
     port: int
-    path_secret: str
     admin_secret: str
     creds_encryption_key: str
     state_dir: Path
@@ -65,16 +64,12 @@ class Settings:
     openai_apps_challenge: str
 
     @property
-    def mount_path(self) -> str:
-        return f"/{self.path_secret}"
-
-    @property
     def mcp_url(self) -> str:
-        return f"{self.public_url}{self.mount_path}/mcp"
+        return f"{self.public_url}/"
 
     @property
     def watchers_url(self) -> str:
-        return f"{self.public_url}{self.mount_path}/watchers"
+        return f"{self.public_url}/watchers"
 
     @property
     def workspace_dir(self) -> Path:
@@ -94,7 +89,6 @@ def load_settings() -> Settings:
         public_url=(_env("SLASH_DHAN_MCP_PUBLIC_URL") or DEFAULT_PUBLIC_URL).rstrip("/"),
         host=_env("SLASH_DHAN_MCP_HOST") or "127.0.0.1",
         port=_int("SLASH_DHAN_MCP_PORT", DEFAULT_PORT),
-        path_secret=_secret("SLASH_DHAN_MCP_PATH_SECRET"),
         admin_secret=_secret("SLASH_DHAN_MCP_ADMIN_SECRET"),
         creds_encryption_key=_secret("CREDS_ENCRYPTION_KEY"),
         state_dir=state_dir,
