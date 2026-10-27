@@ -1,0 +1,60 @@
+[project]
+name = "slash-dhan-mcp"
+version = "0.1.0"
+description = "/markets sandbox MCP for Dhan: the AI assistant writes Python against the read-only slashdhan library; the server runs it, feeds it one operator-managed Dhan session and watches markets."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+  "mcp[cli]>=2.2",
+  "httpx>=0.28",
+  "cryptography>=44",
+  "python-dotenv>=1.0",
+]
+
+[project.scripts]
+slash-dhan-mcp = "slash_dhan_mcp.server:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "ruff>=0.14",
+  "mypy>=1.19",
+  "pre-commit>=4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/slashdhan", "src/slash_dhan_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "N"]
+ignore = ["N818", "RUF022"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/slashdhan/api.py" = ["E501"]
+"tests/fake_dhan.py" = ["E501"]
+"src/slash_dhan_mcp/pages.py" = ["E501", "RUF001"]
+"src/slash_dhan_mcp/server.py" = ["E501", "RUF001"]
+"src/slash_dhan_mcp/emails.py" = ["E501"]
+"src/slash_dhan_mcp/watchers.py" = ["E501"]
+"tests/test_server.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+disable_error_code = ["untyped-decorator"]
+warn_unreachable = true
+files = ["src", "tests", "scripts"]
