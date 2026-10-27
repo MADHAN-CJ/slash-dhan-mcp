@@ -80,6 +80,10 @@ class Settings:
         return f"{self.public_url}/{SKILL_ZIP_NAME}"
 
     @property
+    def skill_md_url(self) -> str:
+        return f"{self.public_url}/SKILL.md"
+
+    @property
     def workspace_dir(self) -> Path:
         return self.state_dir / "workspace"
 

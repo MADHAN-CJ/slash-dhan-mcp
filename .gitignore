@@ -13,3 +13,4 @@ dist/
 docs/
 deploy/.host
 .DS_Store
+.taste-skill/

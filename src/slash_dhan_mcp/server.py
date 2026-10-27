@@ -351,7 +351,11 @@ def build_server(app: App) -> MCPServer[Any]:
             notice = pages.error_box(request.query_params["error"])
         cards = await anyio.to_thread.run_sync(_cards, app)
         feed = await anyio.to_thread.run_sync(app.feed.status)
-        return HTMLResponse(pages.watchers_page(cards, s.watchers_url, feed, notice, s.skill_url))
+        return HTMLResponse(
+            pages.watchers_page(
+                cards, s.watchers_url, feed, notice, s.skill_url, s.skill_md_url, s.mcp_url
+            )
+        )
 
     @server.custom_route("/watchers/{wid}/{action}", methods=["POST"])
     async def watchers_action(request: Request) -> Response:
@@ -457,6 +461,17 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             return PlainTextResponse(f"scrip master unavailable: {e}", status_code=502)
         return FileResponse(path, media_type="text/csv")
 
+    async def skill_md(_: Request) -> Response:
+        try:
+            text = await anyio.to_thread.run_sync(s.skill_file.read_bytes)
+        except OSError:
+            return PlainTextResponse("skill file not available", status_code=404)
+        return Response(
+            text,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": 'inline; filename="SKILL.md"'},
+        )
+
     async def skill_zip(_: Request) -> Response:
         try:
             text = await anyio.to_thread.run_sync(s.skill_file.read_bytes)
@@ -499,6 +514,7 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             Route("/dhan/{path:path}", gateway, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
             Route("/scrip-master.csv", scrip_master, methods=["GET"]),
             Route(f"/{SKILL_ZIP_NAME}", skill_zip, methods=["GET"]),
+            Route("/SKILL.md", skill_md, methods=["GET"]),
             Route("/.well-known/openai-apps-challenge", openai_apps_challenge, methods=["GET"]),
             Route("/internal/sweep", sweep, methods=["POST"]),
             Mount("/", app=mcp_app),

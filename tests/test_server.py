@@ -273,6 +273,11 @@ def test_skill_zip_download_and_page_link(h: Harness) -> None:
     assert body.startswith(b"---\nname: slash-markets-dhan\n")
     page = httpx.get(f"{h.base}/watchers").text
     assert f'href="{h.base}/slash-markets-dhan.zip"' in page
+    assert f'href="{h.base}/SKILL.md"' in page
+    r = httpx.get(f"{h.base}/SKILL.md")
+    assert r.status_code == 200 and r.headers["content-type"] == "text/plain; charset=utf-8"
+    assert r.headers["content-disposition"] == 'inline; filename="SKILL.md"'
+    assert r.content == body
 
 
 def test_tools_before_a_token_is_pushed(h: Harness) -> None:
@@ -536,9 +541,10 @@ def test_watcher_lifecycle_and_page(h: Harness) -> None:
 
     web = httpx.Client(base_url=h.base, follow_redirects=False, timeout=10)
     page = web.get("/watchers").text
-    assert "RELIANCE above 1000" in page and "gold" in page and "MCX hours" in page
+    assert "RELIANCE above 1000" in page and "gold" in page and "in MCX hours" in page
     assert "tr…@example.com" in page and USER_EMAIL not in page
     assert "Libre Baskerville" in page and 'class="slash"' in page and "Dhan feed active" in page
+    assert f'value="{h.base}/"' in page and "Connect your AI assistant" in page
     assert "Zap" not in page and "Slash Markets" not in page
     r = web.post(f"/watchers/{wid}/pause")
     assert r.status_code == 303 and r.headers["location"] == f"{h.base}/watchers"

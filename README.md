@@ -60,7 +60,8 @@ Give the model [`SKILL.md`](SKILL.md): it is the document that teaches it how to
 against `slashdhan` (one composed script per question, return shapes, Dhan quirks, watcher
 contract). The tool description carries only a short reference. The server also serves it as
 `https://host/slash-markets-dhan.zip` (a folder `slash-markets-dhan/SKILL.md`, the shape
-claude.ai's skill upload and `.claude/skills/` expect); the watchers page links to it.
+claude.ai's skill upload and `.claude/skills/` expect) and inline as `https://host/SKILL.md`; the
+watchers page links to both.
 
 With `DHAN_CLIENT_ID` and `DHAN_ACCESS_TOKEN` in `.env`, `uv run python scripts/live_smoke.py`
 exercises the library against the real API without the server.
