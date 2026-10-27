@@ -272,7 +272,7 @@ z.sma(values, period)        z.ema(values, period)       z.rsi(values, period=14
 z.macd(values, 12, 26, 9)    # {"macd": [...], "signal": [...], "histogram": [...]}
 z.bollinger(values, 20, 2.0) # {"upper", "middle", "lower"}
 z.atr(rows, 14)              z.vwap(rows)                z.pct_change(values)
-z.now()  z.today()  z.days_ago(n)  z.ymd(d)  z.to_ist(epoch_seconds)  z.IST
+z.now()  z.today()  z.tomorrow()  z.days_ago(n)  z.ymd(d)  z.to_ist(epoch_seconds)  z.IST
 z.pp(value, limit=4000)      z.help_api()                z.is_nan(x)
 ```
 

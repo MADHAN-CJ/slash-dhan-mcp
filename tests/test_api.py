@@ -262,6 +262,7 @@ def test_market_status_and_time(z: ModuleType) -> None:
     with pytest.raises(ValueError):
         z.market_status("tomorrow")
     assert z.today() == "2026-09-10" and z.days_ago(5) == "2026-09-05"
+    assert z.tomorrow() == "2026-09-11"
     assert z.now().startswith("2026-09-10 12:00")
     assert z.to_ist(BASE_TS).hour == 9 and z.ymd(z.to_ist(BASE_TS)) == "2026-09-10"
 

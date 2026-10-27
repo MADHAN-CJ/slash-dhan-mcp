@@ -34,7 +34,7 @@ from .instruments import (
     resolve_underlying,
     search_instruments,
 )
-from .markets import days_ago, market_status, to_ist, today, ymd
+from .markets import days_ago, market_status, to_ist, today, tomorrow, ymd
 
 Row = dict[str, Any]
 Targets = dict[str, Sequence[int | str]] | Iterable[str | int]
@@ -688,6 +688,7 @@ __all__ = [
     "now",
     "today",
     "days_ago",
+    "tomorrow",
     "ymd",
     "to_ist",
     "IST",

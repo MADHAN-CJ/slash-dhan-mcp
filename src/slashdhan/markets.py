@@ -76,6 +76,11 @@ def days_ago(n: int) -> str:
     return (now_ist().date() - timedelta(days=n)).isoformat()
 
 
+def tomorrow() -> str:
+    """Tomorrow's date in IST as YYYY-MM-DD (Dhan's toDate is exclusive)."""
+    return (now_ist().date() + timedelta(days=1)).isoformat()
+
+
 def ymd(d: date | datetime) -> str:
     """Format a date or datetime as YYYY-MM-DD."""
     return d.strftime("%Y-%m-%d")
