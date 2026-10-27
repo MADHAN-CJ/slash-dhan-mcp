@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import io
 import json
 import logging
 import sys
 import threading
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
@@ -35,7 +37,7 @@ from slashdhan.config import today_ist
 from slashdhan.schema import reference
 
 from . import pages
-from .config import ConfigError, Settings, load_settings
+from .config import SKILL_NAME, SKILL_ZIP_NAME, ConfigError, Settings, load_settings
 from .db import Database
 from .feed import Creds, Feed, FeedError
 from .gateway import Gateway, RunTokens
@@ -349,7 +351,7 @@ def build_server(app: App) -> MCPServer[Any]:
             notice = pages.error_box(request.query_params["error"])
         cards = await anyio.to_thread.run_sync(_cards, app)
         feed = await anyio.to_thread.run_sync(app.feed.status)
-        return HTMLResponse(pages.watchers_page(cards, s.watchers_url, feed, notice))
+        return HTMLResponse(pages.watchers_page(cards, s.watchers_url, feed, notice, s.skill_url))
 
     @server.custom_route("/watchers/{wid}/{action}", methods=["POST"])
     async def watchers_action(request: Request) -> Response:
@@ -455,6 +457,20 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             return PlainTextResponse(f"scrip master unavailable: {e}", status_code=502)
         return FileResponse(path, media_type="text/csv")
 
+    async def skill_zip(_: Request) -> Response:
+        try:
+            text = await anyio.to_thread.run_sync(s.skill_file.read_bytes)
+        except OSError:
+            return PlainTextResponse("skill file not available", status_code=404)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"{SKILL_NAME}/SKILL.md", text)
+        return Response(
+            buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{SKILL_ZIP_NAME}"'},
+        )
+
     async def openai_apps_challenge(_: Request) -> PlainTextResponse:
         if not s.openai_apps_challenge:
             return PlainTextResponse("not configured", status_code=404)
@@ -482,6 +498,7 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             Route("/admin/feed/token", admin_token, methods=["PUT", "POST", "DELETE"]),
             Route("/dhan/{path:path}", gateway, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
             Route("/scrip-master.csv", scrip_master, methods=["GET"]),
+            Route(f"/{SKILL_ZIP_NAME}", skill_zip, methods=["GET"]),
             Route("/.well-known/openai-apps-challenge", openai_apps_challenge, methods=["GET"]),
             Route("/internal/sweep", sweep, methods=["POST"]),
             Mount("/", app=mcp_app),

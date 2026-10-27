@@ -1,5 +1,5 @@
 ---
-name: slash-markets-dhan-data
+name: slash-markets-dhan
 description: Query Indian market data from Dhan by writing Python through the /markets Dhan connector. Use for NSE/BSE stocks and indices, NSE/BSE index and stock F&O and MCX commodities — prices and depth, intraday and daily candles, indicators (EMA/RSI/MACD/Bollinger/ATR/VWAP), option chains with Dhan's IV and greeks, expiries, expired-option history — for the shared feed account's positions, holdings, funds, orders and trades, and for arming e-mail watchers. Trigger on "what is X trading at", trend/outlook/levels, NIFTY/BANKNIFTY/SENSEX or any F&O stock, option IV/OI/max-pain, GOLD/CRUDEOIL/SILVER, "alert me when…".
 ---
 

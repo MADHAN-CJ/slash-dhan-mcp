@@ -9,6 +9,9 @@ from slashdhan.config import DEFAULT_SCRIP_MASTER_URL
 DEFAULT_PORT = 8020
 DEFAULT_PUBLIC_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
 MIN_SECRET_LEN = 32
+SKILL_NAME = "slash-markets-dhan"
+SKILL_ZIP_NAME = f"{SKILL_NAME}.zip"
+DEFAULT_SKILL_FILE = Path(__file__).resolve().parents[2] / "SKILL.md"
 
 
 class ConfigError(RuntimeError):
@@ -62,6 +65,7 @@ class Settings:
     watchers_max_armed: int
     watchers_min_gap_minutes: int
     openai_apps_challenge: str
+    skill_file: Path
 
     @property
     def mcp_url(self) -> str:
@@ -70,6 +74,10 @@ class Settings:
     @property
     def watchers_url(self) -> str:
         return f"{self.public_url}/watchers"
+
+    @property
+    def skill_url(self) -> str:
+        return f"{self.public_url}/{SKILL_ZIP_NAME}"
 
     @property
     def workspace_dir(self) -> Path:
@@ -112,4 +120,5 @@ def load_settings() -> Settings:
         watchers_max_armed=_int("WATCHERS_MAX_ARMED", 50),
         watchers_min_gap_minutes=_int("WATCHERS_MIN_GAP_MINUTES", 15),
         openai_apps_challenge=_env("OPENAI_APPS_CHALLENGE_TOKEN"),
+        skill_file=Path(_env("SLASH_DHAN_MCP_SKILL_FILE") or DEFAULT_SKILL_FILE).expanduser(),
     )

@@ -13,6 +13,7 @@ def test_every_function_named_in_the_skill_exists() -> None:
     names = set(re.findall(r"\bz\.([A-Za-z_][A-Za-z0-9_]*)", text))
     missing = sorted(n for n in names if not hasattr(slashdhan, n))
     assert not missing, missing
+    assert text.startswith("---\nname: slash-markets-dhan\n")
     assert "import slashdhan as z" in text
     assert "notify_email" in text and "feed_status" in text
     for banned in ("zapkite", "Zerodha", "Kite", "Zap ", "Slash Markets"):

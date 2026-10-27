@@ -148,6 +148,7 @@ def watchers_page(
     page_url: str,
     feed: dict[str, Any],
     notice: str = "",
+    skill_url: str = "",
 ) -> str:
     active = [c for c in cards if c[0]["status"] in ACTIVE]
     finished = [c for c in cards if c[0]["status"] not in ACTIVE][:20]
@@ -172,6 +173,12 @@ def watchers_page(
     )
     if finished:
         body += "<h2>Finished</h2>" + "".join(watcher_card(r, f, page_url) for r, f in finished)
+    if skill_url:
+        body += (
+            f'<p class="meta" style="margin-top:2rem">Teach your AI assistant this connector: '
+            f'<a href="{html.escape(skill_url)}">download the slash-markets-dhan skill</a> '
+            "(a zip with SKILL.md; upload it in claude.ai or unzip into .claude/skills/).</p>"
+        )
     return shell("Watchers", body, page_url)
 
 

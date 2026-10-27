@@ -258,6 +258,23 @@ def test_health_root_mcp_and_tool_specs(h: Harness) -> None:
     assert "- option_chain(" in specs["run_python"]["description"]
 
 
+def test_skill_zip_download_and_page_link(h: Harness) -> None:
+    import io
+    import zipfile
+    from pathlib import Path
+
+    r = httpx.get(f"{h.base}/slash-markets-dhan.zip")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    assert r.headers["content-disposition"] == 'attachment; filename="slash-markets-dhan.zip"'
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert zf.namelist() == ["slash-markets-dhan/SKILL.md"]
+        body = zf.read("slash-markets-dhan/SKILL.md")
+    assert body == (Path(__file__).resolve().parents[1] / "SKILL.md").read_bytes()
+    assert body.startswith(b"---\nname: slash-markets-dhan\n")
+    page = httpx.get(f"{h.base}/watchers").text
+    assert f'href="{h.base}/slash-markets-dhan.zip"' in page
+
+
 def test_tools_before_a_token_is_pushed(h: Harness) -> None:
     m = mcp(h)
     res = m.call("feed_status", {})
