@@ -17,7 +17,7 @@ import pytest
 import uvicorn
 
 from slash_dhan_mcp import server as srv
-from slash_dhan_mcp.config import load_settings
+from slash_dhan_mcp.config import SKILL_ZIP_NAME, load_settings
 
 from .fake_dhan import CLIENT_ID, TODAY, FakeDhan
 
@@ -581,3 +581,87 @@ def test_openai_host_gets_a_shorter_script_timeout(h: Harness) -> None:
     assert res.get("isError") and "timed out after 1s" in res["content"][0]["text"]
     res = m.call("run_python", {"code": code}, meta={"progressToken": "p1"})
     assert not res.get("isError") and "done" in res["content"][0]["text"]
+
+
+def test_analytics_events_describe_every_tool_and_page(h: Harness) -> None:
+    events = h.app.analytics
+    events.recent.clear()
+    m = mcp(h)
+    text, _ = m.tool("run_python", code="import slashdhan as z\nprint(z.ltp_of('TCS'))")
+    assert "no token yet" in text
+    e = events.events("run_python")[-1]
+    assert e["ok"] is False and e["feed"] == "unset" and e["host"] == "other"
+    assert "script" not in e
+
+    push_token(h)
+    assert events.events("feed_token_set")[-1]["resumed_watchers"] == 0
+    events.recent.clear()
+    code = "import slashdhan as z, json\nprint(json.dumps({'tcs': z.ltp_of('TCS'), 'p': z.profile()['dhanClientId']}))"
+    m.call("run_python", {"code": code}, meta={"openai/locale": "en-IN"})
+    e = events.events("run_python")[-1]
+    assert e["ok"] is True and e["exit_code"] == 0 and e["host"] == "chatgpt"
+    assert e["script"] == code and e["library_calls"] == ["ltp_of", "profile"]
+    assert e["dhan_calls"] == {"marketfeed/ltp": 1, "profile": 1} and e["dhan_call_count"] == 2
+    assert e["timeout_s"] == 1 and e["duration_ms"] >= 0 and e["timed_out"] is False
+    assert "httpx" in str(e["user_agent"])
+
+    m.tool("run_python", code="import slashdhan as z\nz.nope()")
+    e = events.events("run_python")[-1]
+    assert e["ok"] is False and "AttributeError" in str(e["error"]) and e["dhan_calls"] == {}
+
+    m.call("feed_status", {})
+    assert events.events("feed_status")[-1]["feed"] == "active"
+    m.call("list_watchers", {})
+    assert events.events("list_watchers")[-1]["count"] == 0
+
+    script = "import slashdhan as z, json\nprint(json.dumps({'met': z.ltp_of('TCS') > 700}))"
+    res = m.call(
+        "create_watcher",
+        {"symbol": "TCS", "label": "TCS above 700", "script": script, "notify_email": USER_EMAIL},
+    )["structuredContent"]
+    assert res["created"], res
+    wid = res["watcher"]["id"]
+    e = events.events("create_watcher")[-1]
+    assert e["created"] is True and e["watcher_id"] == wid and e["script"] == script
+    assert e["host"] == "other" and "httpx" in str(e["user_agent"])
+    assert e["library_calls"] == ["ltp_of"] and e["market"] == "NSE" and e["already_met"] is False
+    assert USER_EMAIL not in json.dumps(e)
+
+    res = m.call(
+        "create_watcher",
+        {"symbol": "TCS", "label": "bad", "script": "print('x')", "notify_email": USER_EMAIL},
+    )["structuredContent"]
+    assert not res["created"]
+    e = events.events("create_watcher")[-1]
+    assert e["created"] is False and "contract" in str(e["error"]) and "watcher_id" not in e
+
+    h.fake.prices["NSE_EQ:11536"] = 800.0
+    age_watchers(h)
+    report = sweep(h)
+    assert report["fired"] == 1
+    fired = events.events("watcher_fired")[-1]
+    assert fired["watcher_id"] == wid and fired["emailed"] is True and "value" not in fired
+    assert events.events("watcher_sweep")[-1]["fired"] == 1
+
+    r = httpx.post(f"{h.base}/watchers/{wid}/pause", follow_redirects=False)
+    assert r.status_code == 303
+    assert events.events("watcher_action")[-1] == {
+        **events.events("watcher_action")[-1],
+        "action": "pause",
+        "watcher_id": wid,
+        "ok": True,
+    }
+    httpx.get(f"{h.base}/watchers")
+    assert events.events("watchers_page_viewed")[-1]["watchers"] == 1
+    httpx.get(f"{h.base}/{SKILL_ZIP_NAME}")
+    httpx.get(f"{h.base}/SKILL.md")
+    assert [e["format"] for e in events.events("skill_downloaded")] == ["zip", "md"]
+
+    h.fake.mode = "token_dead"
+    m.tool("run_python", code="import slashdhan as z\nprint(z.ltp_of('TCS'))")
+    assert events.events("feed_expired")[-1]["paused_watchers"] == 0
+    assert events.events("run_python")[-1]["feed"] == "expired"
+    h.fake.mode = "normal"
+    admin(h, "DELETE", "/admin/feed/token")
+    assert events.events("feed_token_cleared")
+    assert all("live-token" not in json.dumps(e) for e in events.events())

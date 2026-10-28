@@ -10,6 +10,7 @@ from typing import Any
 
 from slashdhan.markets import HOURS, hours_for, is_open
 
+from .analytics import SCRIPT_PROPERTY_LIMIT, Analytics, clip, library_calls
 from .config import Settings
 from .db import Database, Row, now_iso, parse_iso
 from .emails import feed_expired, feed_expiring, watcher_alert
@@ -106,13 +107,20 @@ def _now() -> datetime:
 
 class Watchers:
     def __init__(
-        self, settings: Settings, db: Database, feed: Feed, runner: Runner, mailer: Mailer
+        self,
+        settings: Settings,
+        db: Database,
+        feed: Feed,
+        runner: Runner,
+        mailer: Mailer,
+        analytics: Analytics | None = None,
     ) -> None:
         self._settings = settings
         self._db = db
         self._feed = feed
         self._runner = runner
         self._mailer = mailer
+        self._analytics = analytics or Analytics(settings)
 
     @property
     def page_url(self) -> str:
@@ -134,6 +142,37 @@ class Watchers:
         check_every_minutes: int = 1,
         expires_in_days: int = 30,
         market: str = "auto",
+        caller: dict[str, str | None] | None = None,
+    ) -> dict[str, Any] | str:
+        result = self._create(
+            symbol, label, script, check_every_minutes, expires_in_days, market, notify_email
+        )
+        self._analytics.capture(
+            "create_watcher",
+            **(caller or {}),
+            created=not isinstance(result, str),
+            error=clip(result.split("\n")[0], 300) if isinstance(result, str) else None,
+            watcher_id=None if isinstance(result, str) else result["id"],
+            symbol=symbol.strip().upper()[:40],
+            market=None if isinstance(result, str) else result["market"],
+            check_every_minutes=check_every_minutes,
+            expires_in_days=expires_in_days,
+            already_met=None if isinstance(result, str) else result["alreadyMet"],
+            script_bytes=len(script.encode()),
+            script=clip(script, SCRIPT_PROPERTY_LIMIT),
+            library_calls=library_calls(script),
+        )
+        return result
+
+    def _create(
+        self,
+        symbol: str,
+        label: str,
+        script: str,
+        check_every_minutes: int,
+        expires_in_days: int,
+        market: str,
+        notify_email: str,
     ) -> dict[str, Any] | str:
         symbol = symbol.strip().upper()[:40]
         label = " ".join(label.split())[:140]
@@ -328,6 +367,25 @@ class Watchers:
         except Exception as e:
             log.exception("sweep failed")
             report["notes"].append(str(e))
+        if any(report[k] for k in ("expired", "checked", "errored", "pausedByFeed", "notes")):
+            self._analytics.capture(
+                "watcher_sweep",
+                forced=force,
+                markets_open=report["marketsOpen"],
+                **{
+                    k: report[k]
+                    for k in (
+                        "expired",
+                        "checked",
+                        "fired",
+                        "deferred",
+                        "errored",
+                        "pausedByFeed",
+                        "emailRetries",
+                    )
+                },
+                notes=report["notes"] or None,
+            )
         return report
 
     def _notify_operators(self, report: dict[str, Any]) -> None:
@@ -345,6 +403,7 @@ class Watchers:
             if all(self._mailer.send(to, mail) for to in recipients):
                 self._feed.record_mail("expiry", expired["issued_at"] or expired["updated_at"])
                 report["operatorMails"] += 1
+                self._analytics.capture("operator_mailed", kind="feed_expired")
         warning = self._feed.warning_mail_due(self._settings.feed_warning_hours)
         if warning is not None:
             expires = parse_iso(warning["expires_at"]) or _now()
@@ -352,6 +411,7 @@ class Watchers:
             if all(self._mailer.send(to, mail) for to in recipients):
                 self._feed.record_mail("warning", warning["issued_at"])
                 report["operatorMails"] += 1
+                self._analytics.capture("operator_mailed", kind="feed_expiring")
 
     def _retry_unsent(self, report: dict[str, Any]) -> None:
         unsent = self._db.query(
@@ -413,6 +473,15 @@ class Watchers:
                         last_checked_at=now,
                     )
                     report["errored"] += 1
+                    self._analytics.capture(
+                        "watcher_error",
+                        watcher_id=str(row["id"]),
+                        symbol=str(row["symbol"]),
+                        market=str(row["market"]),
+                        failures=count,
+                        error=clip(error, 300),
+                        dhan_calls=result.dhan_calls,
+                    )
                 else:
                     self._update(
                         str(row["id"]), last_error=error, error_count=count, last_checked_at=now
@@ -437,13 +506,28 @@ class Watchers:
                     "INSERT INTO watcher_fires (id, watcher_id, fired_at, value, detail) VALUES (?, ?, ?, ?, ?)",
                     (fire_id, row["id"], now, fields["last_value"], res["detail"]),
                 )
-                if self._mail_fire(row, res["value"], res["detail"]):
+                emailed = self._mail_fire(row, res["value"], res["detail"])
+                if emailed:
                     self._db.execute(
                         "UPDATE watcher_fires SET emailed = 1 WHERE id = ?", (fire_id,)
                     )
                 fields["last_fired_at"] = now
                 fields["fired_count"] = int(row["fired_count"]) + 1
                 report["fired"] += 1
+                self._analytics.capture(
+                    "watcher_fired",
+                    watcher_id=str(row["id"]),
+                    symbol=str(row["symbol"]),
+                    market=str(row["market"]),
+                    fired_count=fields["fired_count"],
+                    value=fields["last_value"],
+                    detail=clip(res["detail"], 300),
+                    emailed=emailed,
+                    age_hours=round(
+                        (_now() - (parse_iso(row["created_at"]) or _now())).total_seconds() / 3600,
+                        1,
+                    ),
+                )
             self._update(str(row["id"]), **fields)
 
 

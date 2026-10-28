@@ -12,6 +12,7 @@ MIN_SECRET_LEN = 32
 SKILL_NAME = "slash-markets-dhan"
 SKILL_ZIP_NAME = f"{SKILL_NAME}.zip"
 DEFAULT_SKILL_FILE = Path(__file__).resolve().parents[2] / "SKILL.md"
+DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com"
 
 
 class ConfigError(RuntimeError):
@@ -66,6 +67,8 @@ class Settings:
     watchers_min_gap_minutes: int
     openai_apps_challenge: str
     skill_file: Path
+    posthog_api_key: str
+    posthog_host: str
 
     @property
     def mcp_url(self) -> str:
@@ -125,4 +128,6 @@ def load_settings() -> Settings:
         watchers_min_gap_minutes=_int("WATCHERS_MIN_GAP_MINUTES", 15),
         openai_apps_challenge=_env("OPENAI_APPS_CHALLENGE_TOKEN"),
         skill_file=Path(_env("SLASH_DHAN_MCP_SKILL_FILE") or DEFAULT_SKILL_FILE).expanduser(),
+        posthog_api_key=_env("POSTHOG_API_KEY"),
+        posthog_host=(_env("POSTHOG_HOST") or DEFAULT_POSTHOG_HOST).rstrip("/"),
     )

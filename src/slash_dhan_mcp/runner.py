@@ -26,6 +26,7 @@ class RunResult:
     duration_ms: int
     truncated: bool
     timed_out: bool
+    dhan_calls: dict[str, int]
 
     def text(self) -> str:
         head = f"exit_code={self.exit_code} duration={self.duration_ms}ms"
@@ -99,7 +100,7 @@ class Runner:
                     os.killpg(proc.pid, signal.SIGKILL)
                 out_b, err_b = proc.communicate()
         finally:
-            self._tokens.revoke(token)
+            dhan_calls = self._tokens.revoke(token)
         duration_ms = int((time.monotonic() - started) * 1000)
         stdout, t1 = _cap(out_b.decode("utf-8", "replace"), s.max_output_bytes)
         stderr, t2 = _cap(err_b.decode("utf-8", "replace"), s.max_output_bytes // 2)
@@ -116,6 +117,7 @@ class Runner:
             duration_ms=duration_ms,
             truncated=t1 or t2,
             timed_out=timed_out,
+            dhan_calls=dhan_calls,
         )
 
 

@@ -10,6 +10,7 @@ dependencies = [
   "httpx>=0.28",
   "cryptography>=44",
   "python-dotenv>=1.0",
+  "posthog>=7",
 ]
 
 [project.scripts]

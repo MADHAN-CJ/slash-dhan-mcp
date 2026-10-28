@@ -82,6 +82,19 @@ bash deploy/remote.sh feed | urls | status | logs
 
 The admin secret never leaves the box: `token` and `feed` read it from the box's `.env`.
 
+## Analytics
+
+Set `POSTHOG_API_KEY` (a PostHog project key, `phc_…`; `POSTHOG_HOST` defaults to the US
+cloud) and the server reports product events to PostHog; unset, nothing leaves the box. The MCP
+has no user accounts, so events are personless and segmented only by `host` (claude / chatgpt /
+other, read from the request). Events: `run_python` (outcome, timing, script source, the
+`slashdhan` functions called, Dhan endpoint counts), `feed_status`, `list_watchers`,
+`create_watcher` (created or why not, script), `watcher_fired`, `watcher_error`,
+`watcher_sweep`, `watcher_action` (page pause/resume/cancel), `watchers_page_viewed`,
+`skill_downloaded`, `feed_token_set` / `feed_token_rejected` / `feed_token_cleared`,
+`feed_expired` and `operator_mailed`. The Dhan token, run tokens and alert email addresses are
+never sent. `src/slash_dhan_mcp/analytics.py` is the whole integration.
+
 ## Development
 
 ```sh
@@ -90,7 +103,8 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyt
 
 The suite runs the library against an in-process fake Dhan and boots the real server against
 it: admin API, scripts through the gateway, feed expiry, operator mails, watcher lifecycle and
-the page. `tests/test_skill.py` pins every function named in `SKILL.md` to the library.
+the page and the analytics events. `tests/test_skill.py` pins every function named in
+`SKILL.md` to the library.
 
 ## Licence
 

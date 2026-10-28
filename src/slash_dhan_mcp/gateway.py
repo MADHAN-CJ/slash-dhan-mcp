@@ -45,23 +45,34 @@ class RunTokens:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._tokens: dict[str, float] = {}
+        self._calls: dict[str, dict[str, int]] = {}
 
     def issue(self, ttl_s: int = RUN_TOKEN_TTL_S) -> str:
         token = secrets.token_urlsafe(32)
         with self._lock:
             now = time.monotonic()
             self._tokens = {t: exp for t, exp in self._tokens.items() if exp > now}
+            self._calls = {t: c for t, c in self._calls.items() if t in self._tokens}
             self._tokens[token] = now + ttl_s
+            self._calls[token] = {}
         return token
+
+    def record(self, token: str, path: str) -> None:
+        with self._lock:
+            calls = self._calls.get(token)
+            if calls is not None:
+                calls[path] = calls.get(path, 0) + 1
 
     def valid(self, token: str) -> bool:
         with self._lock:
             exp = self._tokens.get(token)
             return exp is not None and exp > time.monotonic()
 
-    def revoke(self, token: str) -> None:
+    def revoke(self, token: str) -> dict[str, int]:
+        """Forget the token; returns the Dhan calls it made, by endpoint path."""
         with self._lock:
             self._tokens.pop(token, None)
+            return self._calls.pop(token, {})
 
 
 def allowed(method: str, path: str) -> bool:
@@ -125,6 +136,7 @@ class Gateway:
         kind = kind_for(path)
         await anyio.to_thread.run_sync(self._limiter.acquire, kind, chain_key(body))
         self.calls += 1
+        self._tokens.record(token, path.strip("/"))
         try:
             upstream = await self._client.request(
                 request.method,
