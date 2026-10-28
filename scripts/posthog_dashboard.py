@@ -122,12 +122,8 @@ def main() -> int:
             .json()
         )
     dash_id = int(dash["id"])
-    existing = {
-        i["name"]: i
-        for i in api.get("/insights/", params={"dashboards": dash_id, "limit": 100})
-        .raise_for_status()
-        .json()["results"]
-    }
+    tiles = api.get(f"/dashboards/{dash_id}/").raise_for_status().json().get("tiles") or []
+    existing = {t["insight"]["name"]: t["insight"] for t in tiles if t.get("insight")}
     for name, query in INSIGHTS:
         body = {"name": name, "query": query, "dashboards": [dash_id]}
         if name in existing:
