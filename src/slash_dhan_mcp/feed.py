@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -63,6 +64,7 @@ class Feed:
         self._settings = settings
         self._db = db
         self._client = client or httpx.Client(timeout=PROBE_TIMEOUT_S)
+        self._last_totp: tuple[str, str] | None = None
 
     def _row(self) -> dict[str, Any]:
         row = self._db.one("SELECT * FROM feed WHERE id = 1")
@@ -191,7 +193,13 @@ class Feed:
 
         Per Dhan's docs the three fields travel as query parameters, not a body.
         """
-        params = {"dhanClientId": client_id, "pin": pin, "totp": pyotp.TOTP(totp_secret).now()}
+        totp = pyotp.TOTP(totp_secret)
+        code = totp.now()
+        if self._last_totp == (client_id, code):
+            # Dhan accepts each code once: wait for the next 30 s window instead of failing.
+            time.sleep(totp.interval - time.time() % totp.interval + 0.5)
+            code = totp.now()
+        params = {"dhanClientId": client_id, "pin": pin, "totp": code}
         try:
             r = self._client.post(
                 f"{self._settings.dhan_auth_base_url}/app/generateAccessToken",
@@ -209,7 +217,14 @@ class Feed:
             raise FeedError(f"Dhan refused to generate a token: {detail}")
         token = payload.get("accessToken") or payload.get("access_token")
         if not isinstance(token, str) or len(token) < 20:
-            raise FeedError("Dhan returned no access token (check the PIN and TOTP seed)")
+            said = (
+                error_message(payload)
+                or json.dumps(
+                    {k: v for k, v in payload.items() if "token" not in k.lower()}, default=str
+                )[:300]
+            )
+            raise FeedError(f"Dhan returned no access token (check the PIN and TOTP seed): {said}")
+        self._last_totp = (client_id, code)
         return token
 
     def _validate(self, client_id: str, token: str) -> dict[str, Any]:
