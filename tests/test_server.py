@@ -492,7 +492,8 @@ def test_totp_mode_renews_the_token_by_itself(h: Harness) -> None:
     assert PIN not in text and TOTP_SECRET not in text and h.fake.issued[0] not in text
     minted = [c for c in h.fake.calls if c.path == "/app/generateAccessToken"]
     assert len(minted) == 2 and "access-token" not in minted[-1].headers  # wrong PIN + good
-    assert minted[-1].body["dhanClientId"] == CLIENT_ID and minted[-1].body["pin"] == PIN
+    assert minted[-1].params["dhanClientId"] == CLIENT_ID and minted[-1].params["pin"] == PIN
+    assert minted[-1].body is None and len(minted[-1].params["totp"]) == 6
     assert [c.path for c in h.fake.calls[-2:]] == ["/fundlimit", "/profile"]
     m = mcp(h)
     feed = m.call("feed_status", {})["structuredContent"]

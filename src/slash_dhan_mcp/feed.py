@@ -187,12 +187,15 @@ class Feed:
         return self.status()
 
     def _mint(self, client_id: str, pin: str, totp_secret: str) -> str:
-        """`POST auth.dhan.co/app/generateAccessToken` with the current TOTP code."""
-        body = {"dhanClientId": client_id, "pin": pin, "totp": pyotp.TOTP(totp_secret).now()}
+        """`POST auth.dhan.co/app/generateAccessToken` with the current TOTP code.
+
+        Per Dhan's docs the three fields travel as query parameters, not a body.
+        """
+        params = {"dhanClientId": client_id, "pin": pin, "totp": pyotp.TOTP(totp_secret).now()}
         try:
             r = self._client.post(
                 f"{self._settings.dhan_auth_base_url}/app/generateAccessToken",
-                json=body,
+                params=params,
                 headers={"Accept": "application/json"},
             )
         except httpx.HTTPError as e:

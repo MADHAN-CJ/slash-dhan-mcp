@@ -91,6 +91,7 @@ class Call:
     path: str
     headers: dict[str, str]
     body: Any
+    params: dict[str, str] = field(default_factory=dict)
 
 
 def _chain() -> dict[str, Any]:
@@ -176,11 +177,13 @@ class FakeDhan:
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         body = json.loads(request.content) if request.content else None
-        self.calls.append(Call(request.method, path, dict(request.headers), body))
+        self.calls.append(
+            Call(request.method, path, dict(request.headers), body, dict(request.url.params))
+        )
         if path == "/scrip-master.csv":
             return httpx.Response(200, text=CSV, headers={"content-type": "text/csv"})
         if path == "/app/generateAccessToken":
-            return self._generate_token(body)
+            return self._generate_token(dict(request.url.params))
         if self.rate_limit_next:
             self.rate_limit_next = False
             return httpx.Response(
@@ -226,17 +229,17 @@ class FakeDhan:
             )
         return self._route(path, body)
 
-    def _generate_token(self, body: Any) -> httpx.Response:
-        """auth.dhan.co: PIN + the current TOTP code mint a 24 h token; it replaces the old one."""
+    def _generate_token(self, params: dict[str, str]) -> httpx.Response:
+        """auth.dhan.co: PIN + the current TOTP code (query params, per the docs) mint a 24 h
+        token that replaces the old one."""
         if self.auth_fail:
             return httpx.Response(
                 503, json={"errorCode": "DH-999", "errorMessage": "auth service unavailable"}
             )
         ok = (
-            isinstance(body, dict)
-            and body.get("dhanClientId") == CLIENT_ID
-            and body.get("pin") == PIN
-            and pyotp.TOTP(TOTP_SECRET).verify(str(body.get("totp")), valid_window=1)
+            params.get("dhanClientId") == CLIENT_ID
+            and params.get("pin") == PIN
+            and pyotp.TOTP(TOTP_SECRET).verify(str(params.get("totp")), valid_window=1)
         )
         if not ok:
             return httpx.Response(
