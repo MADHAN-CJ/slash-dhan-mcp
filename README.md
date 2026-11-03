@@ -17,11 +17,11 @@ The MCP endpoint is served unauthenticated at the host root, so this is built fo
 |---|---|
 | `src/slashdhan` | Library the model's scripts import: feed-account reads, quotes, candles, instruments (every segment Dhan serves), Dhan's option chain with IV and greeks, expired-option history, indicators, market hours. Read-only by construction. |
 | `src/slash_dhan_mcp` | MCP server (Streamable HTTP, no auth, served at the host root), tools `run_python`, `feed_status`, `create_watcher`, `list_watchers`; admin API; watchers page. |
-| Feed | A single encrypted Dhan token in SQLite. `PUT /admin/feed/token` validates the token against Dhan before accepting it, records its expiry and data plan, and resumes watchers paused by the previous expiry. |
+| Feed | A single encrypted Dhan token in SQLite. `PUT /admin/feed/token` validates the token against Dhan before accepting it, records its expiry and data plan, and resumes watchers paused by the previous expiry. Optional TOTP mode (`PUT /admin/feed/totp`) stores the login PIN + TOTP seed and the sweeper mints the next token itself. |
 | Gateway | Local `/dhan/...` endpoint. Scripts hold only a per-run token; the gateway injects the Dhan headers, allows read endpoints only and applies Dhan's rate limits once for everyone. |
 | Runner | Spawns `python -I` per script with a scrubbed environment, wall-clock timeout, output cap and a shared workspace that persists between calls. The scrip master is downloaded by the server once per day and served to scripts. |
 | Watchers | SQLite-backed sweeper: baseline on first check, one alert per not-met→met transition, market-hours gate (NSE or MCX), pause when the feed token dies and auto-resume after the next token. Alerts go to the email given at creation. |
-| Operators | Receive an email when the feed token expires and a warning before it does. |
+| Operators | Receive an email when the feed token expires and a warning before it does (in TOTP mode: an email when automatic renewal keeps failing instead). |
 
 Dhan facts that shape the design: access tokens last 24 hours and the API offers no refresh;
 rate limits apply per token, so one limiter fronts all users; market data needs the paid
@@ -31,7 +31,8 @@ call per underlying and expiry every 3 seconds.
 ## Requirements
 
 - Python 3.12 and [uv](https://docs.astral.sh/uv/).
-- A Dhan account with the Data-API subscription, and a way to generate its daily access token.
+- A Dhan account with the Data-API subscription, and either a way to generate its daily access
+  token by hand or TOTP enabled on the account (then the server renews the token itself).
 - A [Resend](https://resend.com) API key for alert and operator emails (optional in
   development: mails are logged instead).
 
@@ -51,6 +52,24 @@ curl -X PUT http://127.0.0.1:8020/admin/feed/token \
   -d '{"dhan_client_id": "1000000001", "access_token": "<24h token>"}'
 curl http://127.0.0.1:8020/admin/feed/status -H "Authorization: Bearer $SLASH_DHAN_MCP_ADMIN_SECRET"
 ```
+
+Or let the server renew the token itself (TOTP mode): store the account's login PIN and TOTP
+seed once. The server mints a token immediately through `auth.dhan.co/app/generateAccessToken`,
+validates it the same way, and from then on mints the next one whenever fewer than
+`SLASH_DHAN_MCP_FEED_RENEW_HOURS` (default 3) remain or the current one dies. Pushing a token by
+hand switches back to manual mode and wipes the PIN and seed.
+
+```sh
+curl -X PUT http://127.0.0.1:8020/admin/feed/totp \
+  -H "Authorization: Bearer $SLASH_DHAN_MCP_ADMIN_SECRET" -H 'Content-Type: application/json' \
+  -d '{"dhan_client_id": "1000000001", "pin": "<login PIN>", "totp_secret": "<base32 seed>"}'
+curl -X POST http://127.0.0.1:8020/admin/feed/renew -H "Authorization: Bearer $SLASH_DHAN_MCP_ADMIN_SECRET"
+```
+
+Trade-off: in TOTP mode the box holds credentials that mint tokens indefinitely (encrypted at
+rest with `CREDS_ENCRYPTION_KEY`); reset the TOTP seed in the Dhan app if the box is ever
+compromised. If renewal fails three times in a row the operators are emailed once and the
+server keeps retrying every five minutes.
 
 Add the MCP to claude.ai as a custom connector (authentication: none), or to ChatGPT (Plugins →
 Add custom MCP server, no authentication), with the server's public URL (`https://host/`). The
@@ -76,11 +95,14 @@ user, clone, venv, `.env` with fresh secrets, certificate) and `update.sh` (rede
 ```sh
 bash deploy/remote.sh setup                     # once
 bash deploy/remote.sh deploy                    # after every push to main
-echo "<24h token>" | bash deploy/remote.sh token <dhan_client_id>   # the daily ritual
+echo "<24h token>" | bash deploy/remote.sh token <dhan_client_id>   # the daily ritual (manual mode)
+printf '%s\n%s\n' "<PIN>" "<TOTP seed>" | bash deploy/remote.sh totp <dhan_client_id>   # or: auto-renew
+bash deploy/remote.sh renew                     # force a renewal (totp mode)
 bash deploy/remote.sh feed | urls | status | logs
 ```
 
-The admin secret never leaves the box: `token` and `feed` read it from the box's `.env`.
+The admin secret never leaves the box: `token`, `totp`, `renew` and `feed` read it from the
+box's `.env`.
 
 ## Analytics
 
@@ -92,6 +114,7 @@ other, read from the request). Events: `run_python` (outcome, timing, script sou
 `create_watcher` (created or why not, script), `watcher_fired`, `watcher_error`,
 `watcher_sweep`, `watcher_action` (page pause/resume/cancel), `watchers_page_viewed`,
 `skill_downloaded`, `feed_token_set` / `feed_token_rejected` / `feed_token_cleared`,
+`feed_totp_set` / `feed_totp_rejected` / `feed_renewed` / `feed_renew_failed`,
 `feed_expired` and `operator_mailed`. The Dhan token, run tokens and alert email addresses are
 never sent. `src/slash_dhan_mcp/analytics.py` is the whole integration.
 

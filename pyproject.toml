@@ -11,6 +11,7 @@ dependencies = [
   "cryptography>=44",
   "python-dotenv>=1.0",
   "posthog>=7",
+  "pyotp>=2.9",
 ]
 
 [project.scripts]

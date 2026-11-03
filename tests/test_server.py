@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ import uvicorn
 from slash_dhan_mcp import server as srv
 from slash_dhan_mcp.config import SKILL_ZIP_NAME, load_settings
 
-from .fake_dhan import CLIENT_ID, TODAY, FakeDhan
+from .fake_dhan import CLIENT_ID, PIN, TODAY, TOTP_SECRET, FakeDhan
 
 ADMIN_SECRET = "a" * 48
 SWEEP_SECRET = "sweep-secret-for-tests"
@@ -53,6 +54,7 @@ class Harness:
             "SLASH_DHAN_MCP_STATE_DIR": str(tmp / "state"),
             "SLASH_DHAN_MCP_OPERATOR_EMAILS": ",".join(OPERATORS),
             "DHAN_BASE_URL": "https://fake.dhan.test",
+            "DHAN_AUTH_BASE_URL": "https://fake.dhan.test",
             "SLASHDHAN_SCRIP_MASTER_URL": "https://fake.dhan.test/scrip-master.csv",
             "SLASHDHAN_TODAY": TODAY.isoformat(),
             "SWEEP_SECRET": SWEEP_SECRET,
@@ -100,6 +102,8 @@ class Harness:
         self.fake.calls.clear()
         self.fake.mode = "normal"
         self.fake.token = None
+        self.fake.auth_fail = False
+        self.fake.issued.clear()
         self.fake.prices.clear()
 
     def stop(self) -> None:
@@ -461,6 +465,109 @@ def test_feed_expiry_pauses_watchers_and_mails_operators(h: Harness) -> None:
     )
     assert is_error and "endpoint-specific" in text
     assert m.call("feed_status", {})["structuredContent"]["feed"] == "active"
+
+
+def test_totp_mode_renews_the_token_by_itself(h: Harness) -> None:
+    assert httpx.put(f"{h.base}/admin/feed/totp", json={}).status_code == 401
+    r = admin(h, "PUT", "/admin/feed/totp", json={"dhan_client_id": CLIENT_ID, "pin": PIN})
+    assert r.status_code == 400 and "required" in r.json()["error"]
+    bad = {"dhan_client_id": CLIENT_ID, "pin": PIN, "totp_secret": "not base32!"}
+    r = admin(h, "PUT", "/admin/feed/totp", json=bad)
+    assert r.status_code == 400 and "base32" in r.json()["error"]
+    wrong = {"dhan_client_id": CLIENT_ID, "pin": "000000", "totp_secret": TOTP_SECRET}
+    r = admin(h, "PUT", "/admin/feed/totp", json=wrong)
+    assert r.status_code == 400 and r.json()["error"].endswith("Invalid PIN or TOTP")
+    status = admin(h, "GET", "/admin/feed/status").json()
+    assert status["status"] == "unset" and status["mode"] == "manual"
+    assert status["totpConfigured"] is False and h.fake.issued == []
+
+    good = {"dhan_client_id": CLIENT_ID, "pin": PIN, "totp_secret": TOTP_SECRET}
+    r = admin(h, "PUT", "/admin/feed/totp", json=good)
+    assert r.status_code == 200, r.text
+    status = r.json()
+    assert status["status"] == "active" and status["mode"] == "totp"
+    assert status["totpConfigured"] is True and status["renewFailures"] == 0
+    assert status["dataPlan"] == "Active" and status["lastRenewedAt"]
+    text = json.dumps(status)
+    assert PIN not in text and TOTP_SECRET not in text and h.fake.issued[0] not in text
+    minted = [c for c in h.fake.calls if c.path == "/app/generateAccessToken"]
+    assert len(minted) == 2 and "access-token" not in minted[-1].headers  # wrong PIN + good
+    assert minted[-1].body["dhanClientId"] == CLIENT_ID and minted[-1].body["pin"] == PIN
+    assert [c.path for c in h.fake.calls[-2:]] == ["/fundlimit", "/profile"]
+    m = mcp(h)
+    feed = m.call("feed_status", {})["structuredContent"]
+    assert feed["feed"] == "active" and feed["mode"] == "totp"
+    text, is_error = m.tool("run_python", code="import slashdhan as z\nprint(z.funds())")
+    assert not is_error and "availabelBalance" in text
+    assert "renews itself" in httpx.get(f"{h.base}/watchers").text
+
+    # The token dies (Dhan issued another one elsewhere): the next sweep mints a new one.
+    text, _ = m.tool(
+        "create_watcher",
+        symbol="TCS",
+        label="TCS above 600",
+        script="import slashdhan as z, json\nltp=z.ltp_of('TCS')\nprint(json.dumps({'met': ltp > 600, 'value': ltp}))",
+        notify_email=USER_EMAIL,
+    )
+    assert json.loads(text)["created"] is True
+    h.fake.token = "replaced-elsewhere-000000"
+    text, is_error = m.tool("run_python", code="import slashdhan as z\nprint(z.funds())")
+    assert is_error and "TokenExpired" in text
+    assert m.call("feed_status", {})["structuredContent"]["feed"] == "expired"
+    assert m.call("list_watchers", {})["structuredContent"]["watchers"][0]["status"] == "PAUSED"
+    report = sweep(h)
+    assert report["feedRenewed"] == 1 and report["resumedByFeed"] == 1
+    assert report["operatorMails"] == 0 and h.app.mailer.sent == []
+    assert len(h.fake.issued) == 2
+    assert m.call("feed_status", {})["structuredContent"]["feed"] == "active"
+    assert m.call("list_watchers", {})["structuredContent"]["watchers"][0]["status"] == "ARMED"
+    text, is_error = m.tool("run_python", code="import slashdhan as z\nprint(z.funds())")
+    assert not is_error
+    assert sweep(h)["feedRenewed"] == 0
+
+    # Near expiry: renewed ahead of time, and no "expires soon" warning in totp mode.
+    soon = (datetime.now(UTC) + timedelta(minutes=30)).isoformat(timespec="seconds")
+    h.app.db.execute("UPDATE feed SET expires_at = ? WHERE id = 1", (soon,))
+    report = sweep(h)
+    assert report["feedRenewed"] == 1 and report["operatorMails"] == 0
+    assert len(h.fake.issued) == 3
+    assert admin(h, "GET", "/admin/feed/status").json()["expiresAt"] > soon
+
+    # Dhan auth down: backoff between attempts, operators mailed once after 3 failures.
+    h.fake.auth_fail = True
+    h.app.db.execute("UPDATE feed SET expires_at = ? WHERE id = 1", (soon,))
+    report = sweep(h)
+    assert report["feedRenewed"] == 0 and "auto-renew failed" in report["notes"][0]
+    status = admin(h, "GET", "/admin/feed/status").json()
+    assert status["renewFailures"] == 1 and status["status"] == "active"
+    assert sweep(h)["notes"] == []  # backoff: no second attempt within 5 minutes
+    for n in (2, 3):
+        h.app.db.execute("UPDATE feed SET last_renew_attempt_at = NULL WHERE id = 1")
+        report = sweep(h)
+        assert admin(h, "GET", "/admin/feed/status").json()["renewFailures"] == n
+    assert report["operatorMails"] == 1
+    mails = [x for x in h.app.mailer.sent if "renewal is failing" in x["subject"]]
+    assert sorted(x["to"] for x in mails) == OPERATORS and "Attempts: 3" in mails[0]["text"]
+    h.app.db.execute("UPDATE feed SET last_renew_attempt_at = NULL WHERE id = 1")
+    assert sweep(h)["operatorMails"] == 0
+    r = admin(h, "POST", "/admin/feed/renew")
+    assert r.status_code == 400 and "unavailable" in r.json()["error"]
+
+    h.fake.auth_fail = False
+    r = admin(h, "POST", "/admin/feed/renew")
+    assert r.status_code == 200 and r.json()["renewFailures"] == 0
+    assert len(h.fake.issued) == 4
+
+    # A manual push switches the mode back and wipes the PIN and seed.
+    h.fake.token = None
+    status = push_token(h, "plain-opaque-token-00000")
+    assert status["mode"] == "manual" and status["totpConfigured"] is False
+    h.app.db.execute("UPDATE feed SET expires_at = ? WHERE id = 1", (soon,))
+    assert sweep(h)["feedRenewed"] == 0 and len(h.fake.issued) == 4
+    r = admin(h, "POST", "/admin/feed/renew")
+    assert r.status_code == 409
+    row = h.app.db.one("SELECT pin_enc, totp_secret_enc FROM feed WHERE id = 1")
+    assert row == {"pin_enc": None, "totp_secret_enc": None}
 
 
 def test_pre_expiry_warning_is_mailed_once(h: Harness) -> None:
