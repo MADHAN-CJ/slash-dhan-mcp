@@ -176,36 +176,3 @@ def feed_expiring(client_id: str | None, expires_at: str, logomark_paths: str = 
             + "\n\nPush the next one through the admin API before then."
         ),
     )
-
-
-def feed_renew_failed(
-    client_id: str | None, failures: int, reason: str, logomark_paths: str = ""
-) -> Email:
-    rows = [("Account", client_id or "unset"), ("Attempts", str(failures)), ("Dhan said", reason)]
-    body = (
-        _p(
-            "The /markets feed is in TOTP mode but Dhan keeps refusing to generate a token "
-            "from the stored PIN and TOTP seed. The current token keeps working until it "
-            "expires; after that every query fails and watchers pause."
-        )
-        + _table(rows)
-        + _muted(
-            "Fix: push today's token manually (PUT /admin/feed/token), or store the corrected "
-            "PIN and seed again (PUT /admin/feed/totp). Renewal keeps retrying every 5 minutes."
-        )
-    )
-    return Email(
-        subject="/markets Dhan feed: automatic token renewal is failing",
-        html=_shell(
-            "The /markets Dhan feed cannot renew its token",
-            "Token auto-renew is failing.",
-            body,
-            READ_ONLY,
-            logomark_paths,
-        ),
-        text=(
-            "The /markets feed is in TOTP mode but Dhan keeps refusing to generate a token.\n\n"
-            + "\n".join(f"{k}: {v}" for k, v in rows)
-            + "\n\nPush today's token manually or store the corrected PIN and seed again."
-        ),
-    )

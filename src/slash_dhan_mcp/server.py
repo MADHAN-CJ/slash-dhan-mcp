@@ -80,8 +80,7 @@ Whether the shared Dhan data feed behind this connector is usable right now.
 
 Call this when run_python reports TokenExpired or DataPlanMissing, or when the user asks why
 data is unavailable. The feed is one operator-managed Dhan session that every user shares; it
-is refreshed daily by the operator (by hand, or automatically when `mode` is `totp`), never
-by the user. Relay the returned `message`.\
+is refreshed daily by the operator, never by the user. Relay the returned `message`.\
 """
 
 CREATE_WATCHER_DESCRIPTION = """\
@@ -213,7 +212,6 @@ class Sweeper(threading.Thread):
 
 class FeedStatus(TypedDict):
     feed: str
-    mode: str
     dhanClientId: str | None
     expiresAt: str | None
     expiresAtIst: str | None
@@ -335,7 +333,6 @@ def build_server(app: App) -> MCPServer[Any]:
         app.analytics.capture("feed_status", **_caller(ctx), feed=state)
         return FeedStatus(
             feed=state,
-            mode=str(status["mode"]),
             dhanClientId=status["dhanClientId"],
             expiresAt=status["expiresAt"],
             expiresAtIst=status["expiresAtIst"],
@@ -529,55 +526,6 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
         )
         return JSONResponse(status)
 
-    async def admin_totp(request: Request) -> JSONResponse:
-        if not _admin_ok(request, s):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        try:
-            body = json.loads(await request.body() or b"{}")
-        except ValueError:
-            return JSONResponse({"error": "body must be JSON"}, status_code=400)
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
-        client_id = str(body.get("dhan_client_id") or "")
-        pin = str(body.get("pin") or "")
-        secret = str(body.get("totp_secret") or "")
-        if not client_id or not pin or not secret:
-            return JSONResponse(
-                {"error": "dhan_client_id, pin and totp_secret are required"}, status_code=400
-            )
-        try:
-            status = await anyio.to_thread.run_sync(app.feed.set_totp, client_id, pin, secret)
-        except FeedError as e:
-            app.analytics.capture("feed_totp_rejected", error=clip(str(e), 200), status=e.status)
-            return JSONResponse({"error": str(e)}, status_code=e.status)
-        resumed = await anyio.to_thread.run_sync(app.watchers.resume_after_feed)
-        status["resumedWatchers"] = resumed
-        app.analytics.capture(
-            "feed_totp_set",
-            data_plan=status.get("dataPlan"),
-            expires_at=status.get("expiresAt"),
-            resumed_watchers=resumed,
-        )
-        return JSONResponse(status)
-
-    async def admin_renew(request: Request) -> JSONResponse:
-        if not _admin_ok(request, s):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        try:
-            status = await anyio.to_thread.run_sync(app.feed.renew)
-        except FeedError as e:
-            app.analytics.capture("feed_renew_failed", error=clip(str(e), 200), forced=True)
-            return JSONResponse({"error": str(e)}, status_code=e.status)
-        resumed = await anyio.to_thread.run_sync(app.watchers.resume_after_feed)
-        status["resumedWatchers"] = resumed
-        app.analytics.capture(
-            "feed_renewed",
-            expires_at=status.get("expiresAt"),
-            resumed_watchers=resumed,
-            forced=True,
-        )
-        return JSONResponse(status)
-
     async def gateway(request: Request) -> Response:
         return await app.gateway.handle(request)
 
@@ -646,8 +594,6 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             Route("/health", health, methods=["GET"]),
             Route("/admin/feed/status", admin_status, methods=["GET"]),
             Route("/admin/feed/token", admin_token, methods=["PUT", "POST", "DELETE"]),
-            Route("/admin/feed/totp", admin_totp, methods=["PUT", "POST"]),
-            Route("/admin/feed/renew", admin_renew, methods=["POST"]),
             Route("/dhan/{path:path}", gateway, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
             Route("/scrip-master.csv", scrip_master, methods=["GET"]),
             Route(f"/{SKILL_ZIP_NAME}", skill_zip, methods=["GET"]),

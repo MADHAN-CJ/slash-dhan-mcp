@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import base64
 import json
-import time
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any
 
 import httpx
-import pyotp
 
 from slashdhan.config import IST
 
@@ -18,8 +15,6 @@ BASE_URL = "https://fake.dhan.test"
 CSV_URL = f"{BASE_URL}/scrip-master.csv"
 CLIENT_ID = "1000000001"
 ACCESS_TOKEN = "test-token-abc"
-PIN = "123456"
-TOTP_SECRET = "JBSWY3DPEHPK3PXP"
 TODAY = date(2026, 9, 10)
 BASE_TS = int(datetime(2026, 9, 10, 9, 15, tzinfo=IST).timestamp())
 
@@ -91,7 +86,6 @@ class Call:
     path: str
     headers: dict[str, str]
     body: Any
-    params: dict[str, str] = field(default_factory=dict)
 
 
 def _chain() -> dict[str, Any]:
@@ -154,8 +148,6 @@ class FakeDhan:
     mode: str = "normal"
     rate_limit_next: bool = False
     token: str | None = None
-    auth_fail: bool = False
-    issued: list[str] = field(default_factory=list)
     prices: dict[str, float] = field(default_factory=dict)
     calls: list[Call] = field(default_factory=list)
 
@@ -177,13 +169,9 @@ class FakeDhan:
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         body = json.loads(request.content) if request.content else None
-        self.calls.append(
-            Call(request.method, path, dict(request.headers), body, dict(request.url.params))
-        )
+        self.calls.append(Call(request.method, path, dict(request.headers), body))
         if path == "/scrip-master.csv":
             return httpx.Response(200, text=CSV, headers={"content-type": "text/csv"})
-        if path == "/app/generateAccessToken":
-            return self._generate_token(dict(request.url.params))
         if self.rate_limit_next:
             self.rate_limit_next = False
             return httpx.Response(
@@ -228,43 +216,6 @@ class FakeDhan:
                 },
             )
         return self._route(path, body)
-
-    def _generate_token(self, params: dict[str, str]) -> httpx.Response:
-        """auth.dhan.co: PIN + the current TOTP code (query params, per the docs) mint a 24 h
-        token that replaces the old one."""
-        if self.auth_fail:
-            return httpx.Response(
-                503, json={"errorCode": "DH-999", "errorMessage": "auth service unavailable"}
-            )
-        ok = (
-            params.get("dhanClientId") == CLIENT_ID
-            and params.get("pin") == PIN
-            and pyotp.TOTP(TOTP_SECRET).verify(str(params.get("totp")), valid_window=1)
-        )
-        if not ok:
-            return httpx.Response(
-                401,
-                json={
-                    "errorType": "Invalid_Authentication",
-                    "errorCode": "DH-901",
-                    "errorMessage": "Invalid PIN or TOTP",
-                },
-            )
-        exp = int(time.time()) + 24 * 3600
-        payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).rstrip(b"=")
-        token = (
-            f"eyJhbGciOiJIUzI1NiJ9.{payload.decode()}.minted-{len(self.issued) + 1:04d}-signature"
-        )
-        self.issued.append(token)
-        self.token = token
-        return httpx.Response(
-            200,
-            json={
-                "dhanClientId": CLIENT_ID,
-                "accessToken": token,
-                "expiryTime": datetime.fromtimestamp(exp, UTC).isoformat(timespec="seconds"),
-            },
-        )
 
     def _route(self, path: str, body: Any) -> httpx.Response:
         if path == "/profile":

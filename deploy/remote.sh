@@ -5,8 +5,6 @@
 #   bash deploy/remote.sh setup              one-time box setup (clone, venv, unit, nginx, cert)
 #   bash deploy/remote.sh deploy             redeploy origin/main
 #   bash deploy/remote.sh token <client_id>  push today's Dhan token (read from stdin)
-#   bash deploy/remote.sh totp <client_id>   switch to auto-renew: PIN then TOTP seed, one per line on stdin
-#   bash deploy/remote.sh renew              force a token renewal now (totp mode)
 #   bash deploy/remote.sh feed               feed status
 #   bash deploy/remote.sh status | logs | urls
 set -euo pipefail
@@ -42,18 +40,6 @@ case "${1:-}" in
       ssh "$HOST" "$ENV_VARS; curl -sS -X PUT http://127.0.0.1:\$P/admin/feed/token -H \"Authorization: Bearer \$A\" -H 'Content-Type: application/json' --data-binary @-"
     echo
     ;;
-  totp)
-    CLIENT_ID=${2:?usage: totp <dhan_client_id>  (PIN on line 1, TOTP seed on line 2 of stdin)}
-    { read -r PIN; read -r SEED; } || true
-    [ -n "${PIN:-}" ] && [ -n "${SEED:-}" ] || { echo "stdin must carry the PIN and the TOTP seed on two lines" >&2; exit 2; }
-    printf '{"dhan_client_id":"%s","pin":"%s","totp_secret":"%s"}' "$CLIENT_ID" "$PIN" "$SEED" | \
-      ssh "$HOST" "$ENV_VARS; curl -sS -X PUT http://127.0.0.1:\$P/admin/feed/totp -H \"Authorization: Bearer \$A\" -H 'Content-Type: application/json' --data-binary @-"
-    echo
-    ;;
-  renew)
-    ssh "$HOST" "$ENV_VARS; curl -sS -X POST http://127.0.0.1:\$P/admin/feed/renew -H \"Authorization: Bearer \$A\""
-    echo
-    ;;
   feed)
     ssh "$HOST" "$ENV_VARS; curl -sS http://127.0.0.1:\$P/admin/feed/status -H \"Authorization: Bearer \$A\""
     echo
@@ -68,7 +54,7 @@ case "${1:-}" in
     ssh "$HOST" "$ENV_VARS; systemctl status slash-dhan-mcp --no-pager | head -5; curl -fsS http://127.0.0.1:\$P/health; echo"
     ;;
   *)
-    echo "usage: $0 setup|deploy|token <client_id>|totp <client_id>|renew|feed|urls|status|logs" >&2
+    echo "usage: $0 setup|deploy|token <client_id>|feed|urls|status|logs" >&2
     exit 2
     ;;
 esac

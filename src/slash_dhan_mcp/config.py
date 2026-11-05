@@ -50,7 +50,6 @@ class Settings:
     state_dir: Path
     db_path: Path
     dhan_base_url: str
-    dhan_auth_base_url: str
     scrip_master_url: str
     resend_api_key: str
     email_from: str
@@ -58,7 +57,6 @@ class Settings:
     sweep_secret: str
     sweep_interval_s: int
     feed_warning_hours: int
-    feed_renew_hours: int
     script_timeout_s: int
     script_max_timeout_s: int
     script_timeout_openai_s: int
@@ -113,7 +111,6 @@ def load_settings() -> Settings:
             _env("SLASH_DHAN_MCP_DB") or state_dir / "slash-dhan-mcp.sqlite3"
         ).expanduser(),
         dhan_base_url=(_env("DHAN_BASE_URL") or "https://api.dhan.co/v2").rstrip("/"),
-        dhan_auth_base_url=(_env("DHAN_AUTH_BASE_URL") or "https://auth.dhan.co").rstrip("/"),
         scrip_master_url=_env("SLASHDHAN_SCRIP_MASTER_URL") or DEFAULT_SCRIP_MASTER_URL,
         resend_api_key=_env("RESEND_API_KEY"),
         email_from=_env("EMAIL_FROM") or "/markets <no-reply@example.com>",
@@ -121,7 +118,6 @@ def load_settings() -> Settings:
         sweep_secret=_env("SWEEP_SECRET"),
         sweep_interval_s=_int("SWEEP_INTERVAL_SECONDS", 60),
         feed_warning_hours=_int("SLASH_DHAN_MCP_FEED_WARNING_HOURS", 2),
-        feed_renew_hours=_int("SLASH_DHAN_MCP_FEED_RENEW_HOURS", 3),
         script_timeout_s=_int("SCRIPT_TIMEOUT_SECONDS", 60),
         script_max_timeout_s=_int("SCRIPT_MAX_TIMEOUT_SECONDS", 180),
         script_timeout_openai_s=_int("SCRIPT_TIMEOUT_OPENAI_SECONDS", 50),
