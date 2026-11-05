@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -9,6 +10,7 @@ import socket
 import threading
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ import uvicorn
 
 from slash_dhan_mcp import server as srv
 from slash_dhan_mcp.config import SKILL_ZIP_NAME, load_settings
+from slash_dhan_mcp.feed import Creds, fingerprint
 
 from .fake_dhan import CLIENT_ID, TODAY, FakeDhan
 
@@ -100,6 +103,8 @@ class Harness:
         self.fake.calls.clear()
         self.fake.mode = "normal"
         self.fake.token = None
+        self.fake.renew_fail = False
+        self.fake.issued.clear()
         self.fake.prices.clear()
 
     def stop(self) -> None:
@@ -463,12 +468,156 @@ def test_feed_expiry_pauses_watchers_and_mails_operators(h: Harness) -> None:
     assert m.call("feed_status", {})["structuredContent"]["feed"] == "active"
 
 
+def _iso(delta: timedelta) -> str:
+    return (datetime.now(UTC) + delta).isoformat(timespec="seconds")
+
+
+def _make_due(h: Harness) -> None:
+    h.app.db.execute(
+        "UPDATE feed SET renew_after = ?, last_renew_attempt_at = NULL WHERE id = 1",
+        (_iso(timedelta(seconds=-1)),),
+    )
+
+
+def test_feed_renews_itself_through_renew_token(h: Harness) -> None:
+    h.fake.token = jwt_like(int(time.time()) + 20 * 3600)
+    first = h.fake.token
+    status = push_token(h, first)
+    renew_after = datetime.fromisoformat(status["renewAfter"])
+    assert timedelta(hours=11, minutes=59) < renew_after - datetime.now(UTC) <= timedelta(hours=12)
+    assert status["renewFailures"] == 0 and status["lastRenewedAt"] is None
+    m = mcp(h)
+    assert m.call("feed_status", {})["structuredContent"]["renewsAtIst"] == status["renewAfterIst"]
+    assert sweep(h)["feedRenewed"] == 0  # not due yet
+    assert not [c for c in h.fake.calls if c.path == "/RenewToken"]
+
+    _make_due(h)
+    report = sweep(h)
+    assert report["feedRenewed"] == 1 and report["operatorMails"] == 0 and report["notes"] == []
+    renew = [c for c in h.fake.calls if c.path == "/RenewToken"]
+    assert len(renew) == 1 and renew[0].method == "GET"
+    assert renew[0].headers["access-token"] == first
+    assert renew[0].headers["dhanclientid"] == CLIENT_ID
+    assert h.fake.issued == [h.fake.token] and h.fake.token != first
+    status = admin(h, "GET", "/admin/feed/status").json()
+    assert status["status"] == "active" and status["lastRenewedAt"] and status["renewFailures"] == 0
+    assert datetime.fromisoformat(status["renewAfter"]) > datetime.now(UTC) + timedelta(hours=11)
+    assert datetime.fromisoformat(status["expiresAt"]) > datetime.now(UTC) + timedelta(hours=23)
+    assert h.fake.token not in json.dumps(status)
+    text, is_error = m.tool("run_python", code="import slashdhan as z\nprint(z.funds())")
+    assert not is_error and "availabelBalance" in text  # scripts use the renewed token
+    assert h.app.mailer.sent == []
+    page = httpx.get(f"{h.base}/watchers").text
+    assert "renews itself at" in page
+    assert sweep(h)["feedRenewed"] == 0  # renewed: nothing due for another 12 h
+
+    # A 401 earned by the OLD token (an in-flight call during the swap) must not expire
+    # the fresh feed; a 401 earned by the current token still does.
+    stale = Creds(CLIENT_ID, first, fingerprint(first))
+    upstream = httpx.Response(401, json={"errorCode": "DH-901", "errorMessage": "Invalid Token"})
+    asyncio.run(h.app.gateway._check_feed(stale, upstream))
+    assert m.call("feed_status", {})["structuredContent"]["feed"] == "active"
+    assert h.app.feed.mark_expired("stale", fingerprint(first)) is False
+    current = h.app.feed.creds()
+    assert isinstance(current, Creds) and current.fingerprint == fingerprint(h.fake.token)
+    h.fake.mode = "token_dead"
+    text, is_error = m.tool("run_python", code="import slashdhan as z\nprint(z.funds())")
+    assert is_error and "TokenExpired" in text
+    assert m.call("feed_status", {})["structuredContent"]["feed"] == "expired"
+    r = admin(h, "POST", "/admin/feed/renew")
+    assert r.status_code == 409 and "no live token" in r.json()["error"]
+    assert sweep(h)["feedRenewed"] == 0 and len(h.fake.issued) == 1
+    h.fake.mode = "normal"
+    h.fake.token = None
+    h.app.mailer.sent.clear()
+    push_token(h, "fresh-web-token-000000001")
+
+    # A claimed attempt is not repeated inside the claim window.
+    h.app.db.execute(
+        "UPDATE feed SET renew_after = ?, last_renew_attempt_at = ? WHERE id = 1",
+        (_iso(timedelta(seconds=-1)), _iso(timedelta(minutes=-1))),
+    )
+    assert sweep(h)["feedRenewed"] == 0 and len(h.fake.issued) == 1
+    r = admin(h, "POST", "/admin/feed/renew")
+    assert r.status_code == 409 and "in progress" in r.json()["error"]
+    h.app.db.execute("UPDATE feed SET last_renew_attempt_at = NULL WHERE id = 1")
+    r = admin(h, "POST", "/admin/feed/renew")  # forced renewal, any time
+    assert r.status_code == 200 and r.json()["lastRenewedAt"] and len(h.fake.issued) == 2
+
+    # Dhan 5xx: counted, backed off 5 min, retried, feed stays active, no mail.
+    h.fake.renew_fail = True
+    _make_due(h)
+    report = sweep(h)
+    assert report["feedRenewed"] == 0 and "renewal failed" in report["notes"][0]
+    status = admin(h, "GET", "/admin/feed/status").json()
+    assert status["status"] == "active" and status["renewFailures"] == 1
+    assert "unavailable" in status["lastRenewError"]
+    assert sweep(h)["notes"] == []  # inside the backoff: no attempt
+    _make_due(h)
+    sweep(h)
+    assert admin(h, "GET", "/admin/feed/status").json()["renewFailures"] == 2
+    assert h.app.mailer.sent == []
+    # ...and once it keeps failing into the warning window, the operators hear about it once.
+    h.app.db.execute("UPDATE feed SET expires_at = ? WHERE id = 1", (_iso(timedelta(hours=2)),))
+    _make_due(h)
+    report = sweep(h)
+    assert report["operatorMails"] == 1
+    warn = [x for x in h.app.mailer.sent if "expires" in x["subject"]]
+    assert sorted(x["to"] for x in warn) == OPERATORS
+    assert "renewal has not succeeded" in warn[0]["text"] and "unavailable" in warn[0]["text"]
+    assert "auto-renew failing (3 attempts)" in httpx.get(f"{h.base}/watchers").text
+    _make_due(h)
+    assert sweep(h)["operatorMails"] == 0
+    h.fake.renew_fail = False
+    _make_due(h)
+    assert sweep(h)["feedRenewed"] == 1
+    status = admin(h, "GET", "/admin/feed/status").json()
+    assert status["renewFailures"] == 0 and status["lastRenewError"] is None
+
+    # Dhan refusing (the token was revoked or replaced elsewhere): the chain is broken,
+    # the feed goes down, watchers pause and the operators get the usual outage mail once.
+    text, _ = m.tool(
+        "create_watcher",
+        symbol="TCS",
+        label="TCS above 600",
+        script="import slashdhan as z, json\nltp=z.ltp_of('TCS')\nprint(json.dumps({'met': ltp > 600, 'value': ltp}))",
+        notify_email=USER_EMAIL,
+    )
+    assert json.loads(text)["created"] is True
+    h.app.mailer.sent.clear()
+    h.fake.token = "replaced-elsewhere-000000"
+    _make_due(h)
+    report = sweep(h)
+    assert report["feedRenewed"] == 0 and report["pausedByFeed"] == 1
+    assert report["operatorMails"] == 1 and "RenewToken refused" in report["notes"][0]
+    down = [x for x in h.app.mailer.sent if "feed DOWN" in x["subject"]]
+    assert sorted(x["to"] for x in down) == OPERATORS and "RenewToken refused" in down[0]["text"]
+    assert m.call("feed_status", {})["structuredContent"]["feed"] == "expired"
+    assert m.call("list_watchers", {})["structuredContent"]["watchers"][0]["status"] == "PAUSED"
+    assert sweep(h)["operatorMails"] == 0
+    h.fake.token = None
+    status = push_token(h, "fresh-web-token-000000002")
+    assert status["resumedWatchers"] == 1 and status["renewFailures"] == 0
+
+
 def test_pre_expiry_warning_is_mailed_once(h: Harness) -> None:
+    # Rows older than renewal (renew_after NULL) are renewed on the first sweep, so a token
+    # about to expire is simply renewed.
     push_token(h, jwt_like(int(time.time()) + 30 * 60))
+    h.app.db.execute("UPDATE feed SET renew_after = NULL WHERE id = 1")
+    report = sweep(h)
+    assert report["feedRenewed"] == 1 and report["operatorMails"] == 0
+    # The warning only goes out when renewal is failing and the end is near, once per token.
+    h.fake.renew_fail = True
+    h.app.db.execute("UPDATE feed SET expires_at = ? WHERE id = 1", (_iso(timedelta(minutes=30)),))
+    _make_due(h)
     assert sweep(h)["operatorMails"] == 1
     warn = [x for x in h.app.mailer.sent if "expires" in x["subject"]]
     assert sorted(x["to"] for x in warn) == OPERATORS
+    _make_due(h)
     assert sweep(h)["operatorMails"] == 0
+    h.fake.renew_fail = False
+    h.fake.token = None
     push_token(h, jwt_like(int(time.time()) + 10 * 3600))
     assert sweep(h)["operatorMails"] == 0
 

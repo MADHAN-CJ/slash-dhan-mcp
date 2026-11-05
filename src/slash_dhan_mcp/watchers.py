@@ -14,7 +14,7 @@ from .analytics import SCRIPT_PROPERTY_LIMIT, Analytics, clip, library_calls
 from .config import Settings
 from .db import Database, Row, now_iso, parse_iso
 from .emails import feed_expired, feed_expiring, watcher_alert
-from .feed import Creds, Feed
+from .feed import Creds, Feed, FeedError
 from .mail import Mailer
 from .pages import LOGOMARK_PATHS, ist_now_text
 from .runner import Runner
@@ -341,10 +341,12 @@ class Watchers:
             "deferred": 0,
             "errored": 0,
             "pausedByFeed": 0,
+            "feedRenewed": 0,
             "operatorMails": 0,
             "emailRetries": 0,
             "notes": [],
         }
+        self._renew_feed(report)
         self._notify_operators(report)
         self._retry_unsent(report)
         now = now_iso()
@@ -367,7 +369,10 @@ class Watchers:
         except Exception as e:
             log.exception("sweep failed")
             report["notes"].append(str(e))
-        if any(report[k] for k in ("expired", "checked", "errored", "pausedByFeed", "notes")):
+        if any(
+            report[k]
+            for k in ("expired", "checked", "errored", "pausedByFeed", "feedRenewed", "notes")
+        ):
             self._analytics.capture(
                 "watcher_sweep",
                 forced=force,
@@ -381,12 +386,32 @@ class Watchers:
                         "deferred",
                         "errored",
                         "pausedByFeed",
+                        "feedRenewed",
                         "emailRetries",
                     )
                 },
                 notes=report["notes"] or None,
             )
         return report
+
+    def _renew_feed(self, report: dict[str, Any]) -> None:
+        """Chain the feed token through RenewToken once it is due (see Feed.renew)."""
+        if not self._feed.renew_due():
+            return
+        try:
+            status = self._feed.renew()
+        except FeedError as e:
+            report["notes"].append(f"feed renewal failed: {e}")
+            if self._feed.creds() == "expired":
+                paused = self.pause_for_feed(FEED_REASONS["expired"])
+                report["pausedByFeed"] += paused
+                self._analytics.capture(
+                    "feed_expired", paused_watchers=paused, error=clip(str(e), 200)
+                )
+            self._analytics.capture("feed_renew_failed", error=clip(str(e), 200))
+            return
+        report["feedRenewed"] = 1
+        self._analytics.capture("feed_renewed", expires_at=status.get("expiresAt"))
 
     def _notify_operators(self, report: dict[str, Any]) -> None:
         recipients = self._settings.operator_emails
@@ -407,7 +432,12 @@ class Watchers:
         warning = self._feed.warning_mail_due(self._settings.feed_warning_hours)
         if warning is not None:
             expires = parse_iso(warning["expires_at"]) or _now()
-            mail = feed_expiring(warning["dhan_client_id"], ist_now_text(expires), LOGOMARK_PATHS)
+            mail = feed_expiring(
+                warning["dhan_client_id"],
+                ist_now_text(expires),
+                LOGOMARK_PATHS,
+                renew_error=_str_or_none(warning["last_renew_error"]),
+            )
             if all(self._mailer.send(to, mail) for to in recipients):
                 self._feed.record_mail("warning", warning["issued_at"])
                 report["operatorMails"] += 1
@@ -536,3 +566,7 @@ def _is_due(row: Row) -> bool:
     if last is None:
         return True
     return (_now() - last).total_seconds() >= int(row["check_every_s"])
+
+
+def _str_or_none(value: Any) -> str | None:
+    return None if value is None else str(value)

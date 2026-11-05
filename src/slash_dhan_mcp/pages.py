@@ -271,9 +271,15 @@ def watchers_page(
     finished = [c for c in cards if c[0]["status"] not in ACTIVE][:20]
     armed = sum(1 for r, _ in active if r["status"] == "ARMED")
     if feed["status"] == "active":
+        if feed.get("renewFailures"):
+            renews = f"auto-renew failing ({feed['renewFailures']} attempts), retrying"
+        elif feed.get("renewAfter"):
+            renews = f"renews itself at {html.escape(_when(feed['renewAfter']))}"
+        else:
+            renews = "renews itself"
         finding = (
             f'<p class="finding">Dhan feed active, token valid until {html.escape(_when(feed["expiresAt"]))} · '
-            f"{armed} armed watcher{'s' if armed != 1 else ''}</p>"
+            f"{renews} · {armed} armed watcher{'s' if armed != 1 else ''}</p>"
         )
     else:
         finding = (

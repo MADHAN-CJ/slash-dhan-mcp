@@ -80,7 +80,8 @@ Whether the shared Dhan data feed behind this connector is usable right now.
 
 Call this when run_python reports TokenExpired or DataPlanMissing, or when the user asks why
 data is unavailable. The feed is one operator-managed Dhan session that every user shares; it
-is refreshed daily by the operator, never by the user. Relay the returned `message`.\
+renews its token by itself each day (`renewsAt`); nothing in a script or in chat can
+refresh it. Relay the returned `message`.\
 """
 
 CREATE_WATCHER_DESCRIPTION = """\
@@ -158,8 +159,8 @@ def build_app(
     runner = Runner(settings, tokens, gateway_url)
     watchers = Watchers(settings, db, feed, runner, mailer, analytics)
 
-    def on_feed_expired(error: str) -> None:
-        if feed.mark_expired(error):
+    def on_feed_expired(error: str, seen_fingerprint: str) -> None:
+        if feed.mark_expired(error, seen_fingerprint):
             paused = watchers.pause_for_feed(FEED_REASONS["expired"])
             log.warning("feed expired; paused %d watchers", paused)
             analytics.capture("feed_expired", paused_watchers=paused, error=clip(error, 200))
@@ -215,6 +216,7 @@ class FeedStatus(TypedDict):
     dhanClientId: str | None
     expiresAt: str | None
     expiresAtIst: str | None
+    renewsAtIst: str | None
     dataPlan: str | None
     lastOkAt: str | None
     message: str | None
@@ -336,6 +338,7 @@ def build_server(app: App) -> MCPServer[Any]:
             dhanClientId=status["dhanClientId"],
             expiresAt=status["expiresAt"],
             expiresAtIst=status["expiresAtIst"],
+            renewsAtIst=status["renewAfterIst"] if state == "active" else None,
             dataPlan=status["dataPlan"],
             lastOkAt=status["lastOkAt"],
             message=None if state == "active" else feed_message(state),
@@ -526,6 +529,24 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
         )
         return JSONResponse(status)
 
+    async def admin_renew(request: Request) -> JSONResponse:
+        if not _admin_ok(request, s):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            status = await anyio.to_thread.run_sync(app.feed.renew)
+        except FeedError as e:
+            if app.feed.creds() == "expired":
+                paused = await anyio.to_thread.run_sync(
+                    app.watchers.pause_for_feed, FEED_REASONS["expired"]
+                )
+                app.analytics.capture(
+                    "feed_expired", paused_watchers=paused, error=clip(str(e), 200)
+                )
+            app.analytics.capture("feed_renew_failed", error=clip(str(e), 200), forced=True)
+            return JSONResponse({"error": str(e)}, status_code=e.status)
+        app.analytics.capture("feed_renewed", expires_at=status.get("expiresAt"), forced=True)
+        return JSONResponse(status)
+
     async def gateway(request: Request) -> Response:
         return await app.gateway.handle(request)
 
@@ -594,6 +615,7 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
             Route("/health", health, methods=["GET"]),
             Route("/admin/feed/status", admin_status, methods=["GET"]),
             Route("/admin/feed/token", admin_token, methods=["PUT", "POST", "DELETE"]),
+            Route("/admin/feed/renew", admin_renew, methods=["POST"]),
             Route("/dhan/{path:path}", gateway, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
             Route("/scrip-master.csv", scrip_master, methods=["GET"]),
             Route(f"/{SKILL_ZIP_NAME}", skill_zip, methods=["GET"]),

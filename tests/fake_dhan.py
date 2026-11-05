@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import time
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -148,6 +150,8 @@ class FakeDhan:
     mode: str = "normal"
     rate_limit_next: bool = False
     token: str | None = None
+    renew_fail: bool = False
+    issued: list[str] = field(default_factory=list)
     prices: dict[str, float] = field(default_factory=dict)
     calls: list[Call] = field(default_factory=list)
 
@@ -217,7 +221,32 @@ class FakeDhan:
             )
         return self._route(path, body)
 
+    def _renew_token(self) -> httpx.Response:
+        """api.dhan.co/v2/RenewToken (verified live 2026-11-05): the caller's live token is
+        replaced by a new 24 h one and stops working at once."""
+        if self.renew_fail:
+            return httpx.Response(
+                503, json={"errorCode": "DH-999", "errorMessage": "renew service unavailable"}
+            )
+        exp = int(time.time()) + 24 * 3600
+        payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).rstrip(b"=")
+        token = (
+            f"eyJhbGciOiJIUzI1NiJ9.{payload.decode()}.renewed-{len(self.issued) + 1:04d}-signature"
+        )
+        self.issued.append(token)
+        self.token = token
+        return httpx.Response(
+            200,
+            json={
+                "createTime": datetime.now(UTC).isoformat(timespec="milliseconds"),
+                "expiryTime": datetime.fromtimestamp(exp, UTC).isoformat(timespec="milliseconds"),
+                "token": token,
+            },
+        )
+
     def _route(self, path: str, body: Any) -> httpx.Response:
+        if path == "/RenewToken":
+            return self._renew_token()
         if path == "/profile":
             return httpx.Response(200, json=PROFILE)
         if path == "/positions":

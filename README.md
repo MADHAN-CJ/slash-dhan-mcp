@@ -8,7 +8,8 @@ watchers (model-authored conditions checked on a schedule without AI tokens, ema
 become true) and a page where anyone can pause, resume or cancel them.
 
 One Dhan session, owned by the operator, feeds every user: there are no user accounts and no
-OAuth. The operator pushes a fresh 24-hour Dhan access token every day through the admin API.
+OAuth. The operator pushes a Dhan access token once through the admin API; the server then renews
+it by itself every day through Dhan's `RenewToken`.
 The MCP endpoint is served unauthenticated at the host root, so this is built for an internal host.
 
 ## How it fits together
@@ -17,13 +18,14 @@ The MCP endpoint is served unauthenticated at the host root, so this is built fo
 |---|---|
 | `src/slashdhan` | Library the model's scripts import: feed-account reads, quotes, candles, instruments (every segment Dhan serves), Dhan's option chain with IV and greeks, expired-option history, indicators, market hours. Read-only by construction. |
 | `src/slash_dhan_mcp` | MCP server (Streamable HTTP, no auth, served at the host root), tools `run_python`, `feed_status`, `create_watcher`, `list_watchers`; admin API; watchers page. |
-| Feed | A single encrypted Dhan token in SQLite. `PUT /admin/feed/token` validates the token against Dhan before accepting it, records its expiry and data plan, and resumes watchers paused by the previous expiry. |
+| Feed | A single encrypted Dhan token in SQLite. `PUT /admin/feed/token` validates the token against Dhan before accepting it, records its expiry and data plan, and resumes watchers paused by the previous expiry. The sweeper then chains it: 12 hours after issue it calls Dhan's `GET /v2/RenewToken`, stores the new 24-hour token and repeats, so one push lasts until the chain breaks. |
 | Gateway | Local `/dhan/...` endpoint. Scripts hold only a per-run token; the gateway injects the Dhan headers, allows read endpoints only and applies Dhan's rate limits once for everyone. |
 | Runner | Spawns `python -I` per script with a scrubbed environment, wall-clock timeout, output cap and a shared workspace that persists between calls. The scrip master is downloaded by the server once per day and served to scripts. |
 | Watchers | SQLite-backed sweeper: baseline on first check, one alert per not-met→met transition, market-hours gate (NSE or MCX), pause when the feed token dies and auto-resume after the next token. Alerts go to the email given at creation. |
-| Operators | Receive an email when the feed token expires and a warning before it does. |
+| Operators | Receive an email when the feed token dies (the chain broke) and a warning when renewal keeps failing with under 3 hours left. |
 
-Dhan facts that shape the design: access tokens last 24 hours and the API offers no refresh;
+Dhan facts that shape the design: access tokens last 24 hours; `RenewToken` swaps a live one for a
+fresh 24-hour token (the old one dies at once) but refuses an expired one;
 rate limits apply per token, so one limiter fronts all users; market data needs the paid
 Data-API plan on the feed account (error 806 otherwise); the option-chain endpoint allows one
 call per underlying and expiry every 3 seconds.
@@ -31,7 +33,8 @@ call per underlying and expiry every 3 seconds.
 ## Requirements
 
 - Python 3.12 and [uv](https://docs.astral.sh/uv/).
-- A Dhan account with the Data-API subscription, and a way to generate its daily access token.
+- A Dhan account with the Data-API subscription and an access token generated on Dhan Web (the
+  type `RenewToken` accepts).
 - A [Resend](https://resend.com) API key for alert and operator emails (optional in
   development: mails are logged instead).
 
@@ -43,14 +46,24 @@ uv sync
 uv run slash-dhan-mcp           # MCP at http://127.0.0.1:8020/, watchers page at /watchers
 ```
 
-Push today's token (the server validates it against Dhan first):
+Push a token (the server validates it against Dhan first, then keeps it alive by itself):
 
 ```sh
 curl -X PUT http://127.0.0.1:8020/admin/feed/token \
   -H "Authorization: Bearer $SLASH_DHAN_MCP_ADMIN_SECRET" -H 'Content-Type: application/json' \
   -d '{"dhan_client_id": "1000000001", "access_token": "<24h token>"}'
 curl http://127.0.0.1:8020/admin/feed/status -H "Authorization: Bearer $SLASH_DHAN_MCP_ADMIN_SECRET"
+curl -X POST http://127.0.0.1:8020/admin/feed/renew -H "Authorization: Bearer $SLASH_DHAN_MCP_ADMIN_SECRET"  # force a renewal
 ```
+
+Renewal runs inside the 60-second sweeper: a token is renewed `SLASH_DHAN_MCP_FEED_RENEW_AFTER_HOURS`
+(default 12) after it was issued, which leaves a 12-hour budget to notice trouble. A network
+error or a Dhan 5xx is retried every 5 minutes; if that keeps failing into the last
+`SLASH_DHAN_MCP_FEED_WARNING_HOURS` (default 3) the operators get one warning. A refusal from
+Dhan (token revoked, replaced elsewhere, or already expired) breaks the chain: the feed is
+marked expired, watchers pause and the operators get the outage mail, and one new push
+restarts everything. Scripts never hold the Dhan token, so a renewal needs no restart; a 401
+earned by the previous token during the swap is recognised by its fingerprint and ignored.
 
 Add the MCP to claude.ai as a custom connector (authentication: none), or to ChatGPT (Plugins →
 Add custom MCP server, no authentication), with the server's public URL (`https://host/`). The
@@ -76,11 +89,12 @@ user, clone, venv, `.env` with fresh secrets, certificate) and `update.sh` (rede
 ```sh
 bash deploy/remote.sh setup                     # once
 bash deploy/remote.sh deploy                    # after every push to main
-echo "<24h token>" | bash deploy/remote.sh token <dhan_client_id>   # the daily ritual
+echo "<token>" | bash deploy/remote.sh token <dhan_client_id>   # once; it renews itself from here
+bash deploy/remote.sh renew                     # force a renewal
 bash deploy/remote.sh feed | urls | status | logs
 ```
 
-The admin secret never leaves the box: `token` and `feed` read it from the box's `.env`.
+The admin secret never leaves the box: `token`, `renew` and `feed` read it from the box's `.env`.
 
 ## Analytics
 
@@ -92,6 +106,7 @@ other, read from the request). Events: `run_python` (outcome, timing, script sou
 `create_watcher` (created or why not, script), `watcher_fired`, `watcher_error`,
 `watcher_sweep`, `watcher_action` (page pause/resume/cancel), `watchers_page_viewed`,
 `skill_downloaded`, `feed_token_set` / `feed_token_rejected` / `feed_token_cleared`,
+`feed_renewed` / `feed_renew_failed`,
 `feed_expired` and `operator_mailed`. The Dhan token, run tokens and alert email addresses are
 never sent. `src/slash_dhan_mcp/analytics.py` is the whole integration.
 

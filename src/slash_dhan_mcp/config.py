@@ -57,6 +57,7 @@ class Settings:
     sweep_secret: str
     sweep_interval_s: int
     feed_warning_hours: int
+    feed_renew_after_hours: int
     script_timeout_s: int
     script_max_timeout_s: int
     script_timeout_openai_s: int
@@ -117,7 +118,8 @@ def load_settings() -> Settings:
         operator_emails=operators,
         sweep_secret=_env("SWEEP_SECRET"),
         sweep_interval_s=_int("SWEEP_INTERVAL_SECONDS", 60),
-        feed_warning_hours=_int("SLASH_DHAN_MCP_FEED_WARNING_HOURS", 2),
+        feed_warning_hours=_int("SLASH_DHAN_MCP_FEED_WARNING_HOURS", 3),
+        feed_renew_after_hours=_int("SLASH_DHAN_MCP_FEED_RENEW_AFTER_HOURS", 12),
         script_timeout_s=_int("SCRIPT_TIMEOUT_SECONDS", 60),
         script_max_timeout_s=_int("SCRIPT_MAX_TIMEOUT_SECONDS", 180),
         script_timeout_openai_s=_int("SCRIPT_TIMEOUT_OPENAI_SECONDS", 50),

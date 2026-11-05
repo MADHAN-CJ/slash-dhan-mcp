@@ -95,7 +95,7 @@ class Gateway:
         settings: Settings,
         feed: Feed,
         tokens: RunTokens,
-        on_feed_expired: Callable[[str], None],
+        on_feed_expired: Callable[[str, str], None],
         transport: httpx.AsyncBaseTransport | None = None,
         limiter: RateLimiter | None = None,
     ) -> None:
@@ -170,7 +170,9 @@ class Gateway:
             return
         if not await self._token_alive(creds):
             await anyio.to_thread.run_sync(
-                self._on_feed_expired, f"Dhan {upstream.status_code}: {upstream.text[:200]}"
+                self._on_feed_expired,
+                f"Dhan {upstream.status_code}: {upstream.text[:200]}",
+                creds.fingerprint,
             )
 
     async def _token_alive(self, creds: Creds) -> bool:

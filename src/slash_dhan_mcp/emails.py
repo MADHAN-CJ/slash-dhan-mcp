@@ -155,11 +155,19 @@ def feed_expired(client_id: str | None, since: str, reason: str, logomark_paths:
     )
 
 
-def feed_expiring(client_id: str | None, expires_at: str, logomark_paths: str = "") -> Email:
+def feed_expiring(
+    client_id: str | None,
+    expires_at: str,
+    logomark_paths: str = "",
+    renew_error: str | None = None,
+) -> Email:
     rows = [("Account", client_id or "unset"), ("Expires", expires_at)]
+    if renew_error:
+        rows.append(("Last renewal error", renew_error))
     body = _p(
-        "The Dhan access token behind the /markets feed expires soon. Push the next one "
-        "through the admin API before then to avoid an outage."
+        "The Dhan access token behind the /markets feed expires soon and its automatic "
+        "renewal has not succeeded (it is retried every five minutes until the token dies). "
+        "Push a fresh token through the admin API before then to avoid an outage."
     ) + _table(rows)
     return Email(
         subject=f"/markets Dhan feed token expires {expires_at}",
@@ -171,7 +179,8 @@ def feed_expiring(client_id: str | None, expires_at: str, logomark_paths: str = 
             logomark_paths,
         ),
         text=(
-            "The Dhan access token behind the /markets feed expires soon.\n\n"
+            "The Dhan access token behind the /markets feed expires soon and its automatic "
+            "renewal has not succeeded.\n\n"
             + "\n".join(f"{k}: {v}" for k, v in rows)
             + "\n\nPush the next one through the admin API before then."
         ),
