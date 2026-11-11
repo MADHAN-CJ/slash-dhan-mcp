@@ -46,6 +46,7 @@ from .analytics import (
     library_calls,
     posthog_client,
 )
+from .api import build_api
 from .config import SKILL_NAME, SKILL_ZIP_NAME, ConfigError, Settings, load_settings
 from .db import Database
 from .feed import Creds, Feed, FeedError
@@ -135,6 +136,7 @@ class App:
     watchers: Watchers
     master: MasterCache
     analytics: Analytics
+    run_gate: anyio.Semaphore
 
     def close(self) -> None:
         self.analytics.close()
@@ -167,7 +169,10 @@ def build_app(
 
     gateway = Gateway(settings, feed, tokens, on_feed_expired, transport=dhan_async_transport)
     master = MasterCache(settings, dhan_http)
-    return App(settings, db, mailer, feed, tokens, gateway, runner, watchers, master, analytics)
+    run_gate = anyio.Semaphore(settings.max_concurrent_runs)
+    return App(
+        settings, db, mailer, feed, tokens, gateway, runner, watchers, master, analytics, run_gate
+    )
 
 
 def feed_message(reason: str) -> str:
@@ -267,7 +272,7 @@ def build_server(app: App) -> MCPServer[Any]:
             "against `slashdhan` and running it with run_python. Print only compact results."
         ),
     )
-    run_gate = anyio.Semaphore(s.max_concurrent_runs)
+    run_gate = app.run_gate
 
     @server.tool(
         name="run_python",
@@ -627,6 +632,7 @@ def build_asgi(server: MCPServer[Any], app: App) -> Starlette:
                 app=StaticFiles(directory=str(Path(__file__).parent / "brand")),
                 name="brand",
             ),
+            Mount("/api/v1", app=build_api(app, server), name="api"),
             Mount("/", app=mcp_app),
         ],
         lifespan=mcp_app.router.lifespan_context,

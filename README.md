@@ -96,6 +96,25 @@ bash deploy/remote.sh feed | urls | status | logs
 
 The admin secret never leaves the box: `token`, `renew` and `feed` read it from the box's `.env`.
 
+## HTTP API (the tools without MCP)
+
+The same four tools are also plain HTTP under `/api/v1`, for chat clients that cannot install
+an MCP connector. They call the same services as the tools and share their concurrency gate;
+like the MCP they are unauthenticated (internal host) and answer browser clients (CORS `*`).
+
+| Tool | Route | Notes |
+|------|-------|-------|
+| run_python | `POST /api/v1/run` `{code, timeout_seconds?}` | `{ok, exit_code, stdout, stderr, duration_ms, timed_out, truncated, feed, message}`; a failing script is HTTP 200 with `ok:false` and the traceback in `stderr`; a feed that is down is 503 with `message` |
+| feed_status | `GET /api/v1/feed` | same object as the tool |
+| create_watcher | `POST /api/v1/watchers` `{symbol, label, script, notify_email, check_every_minutes?, expires_in_days?, market?}` | 201 on success, 200 `created:false` with the reason otherwise |
+| list_watchers | `GET /api/v1/watchers` | same rows as the tool |
+| catalogue | `GET /api/v1/tools` | the four tools exactly as the MCP advertises them (description, input/output schemas) plus each one's route, for building function definitions |
+
+```sh
+curl -X POST https://host/api/v1/run -H 'Content-Type: application/json' \
+  -d '{"code": "import slashdhan as z\nprint(z.ltp_of(\"NIFTY\"))"}'
+```
+
 ## Analytics
 
 Set `POSTHOG_API_KEY` (a PostHog project key, `phc_…`; `POSTHOG_HOST` defaults to the US
